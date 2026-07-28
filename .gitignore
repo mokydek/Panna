@@ -1,0 +1,25 @@
+# Roblox Studio / Rojo output
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Local tooling
+.aftman/
+.rokit/
+.vscode/
+.idea/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Secrets and local configuration
+.env
+.env.*
+secrets.*
+!secrets.example.*

@@ -1,0 +1,35 @@
+{
+  "name": "Panna Football",
+  "servePort": 34872,
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "PannaShared": {
+        "$path": "src/shared"
+      }
+    },
+    "ServerScriptService": {
+      "PannaServer": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "$properties": {
+        "CharacterWalkSpeed": 18,
+        "CharacterJumpHeight": 7.2,
+        "EnableMouseLockOption": true
+      },
+      "StarterPlayerScripts": {
+        "PannaClient": {
+          "$path": "src/client"
+        }
+      }
+    },
+    "Workspace": {
+      "$properties": {
+        "StreamingEnabled": true,
+        "FallenPartsDestroyHeight": -100
+      }
+    }
+  }
+}
