@@ -1,15 +1,20 @@
 --!strict
 
 local Config = {
-	Version = "0.1.0-alpha",
+	Version = "0.2.0-alpha",
 
 	World = {
-		RootName = "PannaWorld",
-		LobbyOrigin = Vector3.new(0, 0, -115),
-		LobbySpawn = CFrame.new(0, 4, -118),
+		RootName = "PannaDistrict",
+		LobbyOrigin = Vector3.new(0, 0, -165),
+		LobbySpawn = CFrame.new(0, 4, -170),
+		MinimumArenaCount = 6,
 		ArenaPositions = {
-			CFrame.new(-72, 0, 20),
-			CFrame.new(72, 0, 20),
+			CFrame.new(-58, 0, -75),
+			CFrame.new(58, 0, -75),
+			CFrame.new(-58, 0, 25),
+			CFrame.new(58, 0, 25),
+			CFrame.new(-58, 0, 125),
+			CFrame.new(58, 0, 125),
 		},
 		ArenaWidth = 48,
 		ArenaLength = 76,
@@ -17,6 +22,12 @@ local Config = {
 		GoalWidth = 16,
 		GoalHeight = 8,
 		GoalDepth = 5,
+	},
+
+	Rooms = {
+		Capacity = 2,
+		InteractionDistance = 16,
+		WaitingTimeoutSeconds = 120,
 	},
 
 	Match = {
@@ -59,10 +70,19 @@ local Config = {
 		TackleCooldown = 1.2,
 		SkillCooldown = 2.0,
 		DashCooldown = 3.0,
+		FeintCooldown = 1.1,
+		ShieldToggleCooldown = 0.15,
 		TackleRadius = 7,
 		SkillRadius = 8,
 		DashSpeed = 44,
 		DashSeconds = 0.22,
+		FeintRadius = 9,
+		FeintSpeed = 28,
+		FeintFreeSeconds = 0.18,
+		ShieldRadius = 5.5,
+		ShieldMaxSeconds = 2.5,
+		ShieldDribbleDistanceMultiplier = 0.72,
+		ShieldTackleDot = 0.35,
 	},
 
 	Security = {

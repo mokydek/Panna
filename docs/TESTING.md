@@ -7,34 +7,72 @@
 | Проверка | Статус | Что доказано |
 | --- | --- | --- |
 | `scripts/validate-project.ps1` | пройдена | JSON Rojo читается, обязательные пути существуют, высокоуверенные сигнатуры секретов не найдены, базовый эвристический баланс текущих Luau-файлов совпадает |
-| `rojo build` + Roblox Studio CLI `RunScript` | пройдена, exit code 0 | Rojo mapping, загрузка модулей, процедурный мир, две арены, створы ворот, reset, инициализация `BallService`, server-owned мячи и классы Remote |
-| Multiplayer Local Server с 2+ клиентами | **не подтверждён** | Требуется ручной Play test |
+| `rojo build` + Roblox Studio CLI `RunScript` | пройдена, exit code 0 | Rojo mapping, загрузка модулей, `PannaDistrict`, непрерывная улица, шесть тематических комнат, комнатный контракт, reset, `BallService`, server-owned мячи и классы Remote |
+| Запечённая модель Edit Mode | пройдена на уровне build/smoke | `default.project.json` подключает `src/world/PannaDistrict.model.json`; совместимый корень переиспользуется сервером, а процедурная регенерация остаётся fallback |
+| `StudioTestService` Local Server smoke (4 клиента, 2 комнаты) | пройден | Четыре клиента физически активируют `EntryPrompt`, входят в две независимые комнаты с разными `MatchId`, получают верные `ArenaId`/`InMatch`, а барьеры закрываются |
 | Полный матч, гол, overtime, панна, disconnect, rematch | **не подтверждены** | Требуется ручной многоклиентный прогон |
 | DataStore load/save в опубликованном staging | **не подтверждён** | Требуется отдельный staging Experience и безопасные тестовые данные |
 | Физические мобильные устройства/геймпад/сетевые условия | **не подтверждены** | Требуются реальные устройства и latency tests |
 
 Статус «пройдена» относится к проверенному commit/рабочему дереву. После изменения мира, контрактов Arena/Remote или Rojo mapping тест нужно повторить.
 
+## Устройство многоклиентного smoke
+
+`multiplayer.project.json` собирает тестовый place из того же игрового кода и `src/world/PannaDistrict.model.json`, что и основной проект, и дополнительно подключает:
+
+- `tests/multiplayer-server.server.lua` — серверные ожидания готовности, размещение четырёх игроков в двух комнатах и проверки изоляции;
+- `tests/multiplayer-client.client.lua` — клиентское физическое использование `EntryPrompt`;
+- `scripts/multiplayer-smoke.luau` — драйвер `StudioTestService:ExecuteMultiplayerTestAsync(4, ...)`.
+
+Тестовые server/client-скрипты отсутствуют в `default.project.json`, поэтому не попадают в обычную сборку. Прогон завершился точным маркером дочернего server-процесса:
+
+```text
+PANNA_MULTIPLAYER_END PANNA_MULTIPLAYER_SMOKE_OK clients=4 arenas=2 matches=2
+```
+
+Маркер означает, что:
+
+1. сервер и четыре клиента дождались готовности игрового runtime и персонажей;
+2. две пары клиентов были перемещены к `EntryZone` комнат `Arena_1` и `Arena_2`;
+3. каждый клиент физически удержал свой `EntryPrompt`, после чего обе комнаты вошли в `Countdown` или `Active`;
+4. комнаты получили два разных непустых `MatchId`, а каждый игрок — `InMatch = true` и ожидаемый `ArenaId`;
+5. барьеры обеих занятых комнат закрылись.
+
+Это программный Local Server тест через `StudioTestService`, а не ручной Play-прогон. Он подтверждает две одновременно работающие комнаты, но не полный матч до `Result`/`Free`, реванш или все шесть комнат одновременно.
+
 ## Подтверждённый Studio CLI smoke
 
 После финальных изменений текущий `scripts/studio-smoke.luau` был заново выполнен официальной задачей Roblox Studio CLI `RunScript` над place, собранным Rojo. Процесс завершился с exit code 0 и маркером:
 
 ```text
-PANNA_STUDIO_SMOKE_OK version=0.1.0-alpha arenas=2
+PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6
 ```
 
 Подтверждённый прогон фактически проверил:
 
 1. `ServerScriptService/PannaServer` и `ReplicatedStorage/PannaShared` попали в place через Rojo.
-2. Загружаются `Config`, `Net`, `Types`, `WorldBuilder`, `ArenaService`, `RemoteRegistry`, `RateLimiter`, `PlayerDataService`, `PannaDetector`, `BallService`, `MatchService` и `QueueService`.
-3. `WorldBuilder.Build` создаёт корень нужного имени, `LobbySpawn` и `QueuePrompt`.
-4. `ArenaService` обнаруживает ровно две MVP-арены.
-5. У каждой арены совпадает `ArenaId`, мяч физический и незакреплённый, голевые зоны касаемые и не сталкиваются, их створ начинается на уровне поля, `Bounds` закреплён и не сталкивается.
-6. `ArenaService:ResetBall` возвращает мяч к `BallSpawn` с допустимой погрешностью.
-7. `BallService.new` создаёт runtime-state для каждой арены, а оба мяча остаются под network ownership сервера.
-8. RemoteEvent/RemoteFunction созданы с ожидаемыми классами.
+2. Загружаются `Config`, `Net`, `Types`, `WorldBuilder`, `ArenaService`, `RoomService`, `RemoteRegistry`, `RateLimiter`, `PlayerDataService`, `PannaDetector`, `BallService`, `MatchService` и `QueueService`.
+3. `WorldBuilder.Build` принимает совместимый запечённый `PannaDistrict` (или создаёт fallback), проверяются `ArenaCount = 6`, `LayoutVersion`, `LobbySpawn`, `QueuePrompt`, `DistrictEnvironment`, непрерывная `CentralStreet` и сервисные зоны Training/Shop/Locker/Trophy/Rest.
+4. `ArenaService` обнаруживает ровно шесть комнат с уникальными темами Concrete Cage, Neon Futsal, Club House, Industrial, Training Lab и Championship.
+5. Каждая комната содержит матчевое ядро (`HomeSpawn`, `AwaySpawn`, `BallSpawn`, ворота, `Bounds`, мяч) и комнатный контракт (`EntryZone/EntryPrompt`, `ExitZone/ExitPrompt`, `Barrier`, два waiting spawn, `StreetSpawn`, `StatusBoard` и `SpectatorZone`).
+6. Начальные атрибуты/табло согласованы с состоянием `Free`, prompts включены, барьер открыт; мяч физический, незакреплённый и расположен в допустимой точке.
+7. `ArenaService:ResetBall` возвращает каждый мяч к `BallSpawn` с допустимой погрешностью.
+8. `BallService.new` создаёт runtime-state для каждой комнаты, а все шесть мячей остаются под network ownership сервера.
+9. RemoteEvent/RemoteFunction созданы с ожидаемыми классами.
 
 Этот подтверждённый прогон относится к расширенному сценарию с `BallService.new`, проверкой server-owned мячей и нижней границы створов. После любого изменения smoke-файла повторите прогон: прежний лог не подтверждает новую версию сценария.
+
+## Bake для Edit Mode
+
+Для воспроизводимого обновления статической карты используется:
+
+```powershell
+./scripts/bake-editable-place.ps1
+```
+
+Процесс строит place без статического корня через `source.project.json`, запускает `WorldBuilder` в Studio, извлекает детерминированный Rojo JSON в `src/world/PannaDistrict.model.json` и собирает `build/Panna-Football.rbxlx` через основной проект. Для отдельной проверки модели можно выполнить `rojo build world.project.json --output build/PannaDistrict.rbxmx`.
+
+Успех bake определяется маркером `PANNA_BAKE_OK`, а не только существованием выходного файла. Скрипты `capture-map.luau`/`extract-captures.ps1` создают обзорные PNG для визуального review, но изображение само по себе не доказывает работу комнатного цикла. В текущем CLI-сеансе Studio `StudioCaptureService` не стал доступен до таймаута, поэтому релизные обзорные изображения были сняты из реально открытого окна Studio в Edit Mode; capture-скрипт при такой ситуации завершает работу с явной ошибкой и не создаёт фиктивный результат.
 
 ## Как воспроизвести
 
@@ -90,12 +128,13 @@ if (-not (Select-String -LiteralPath $pannaOutput -SimpleMatch 'PANNA_STUDIO_SMO
 
 `--outputFile` содержит сам выполненный скрипт и результат. Успех определяйте по точному маркеру, а не только по существованию файла или exit code.
 
-## Что smoke не проверяет
+## Что smoke не проверяют
 
-`RunScript` намеренно узкий и **не доказывает**:
+Два подтверждённых smoke намеренно ограничены и **не доказывают**:
 
 - полный обычный запуск `init.server.lua` и жизненный цикл сервера;
-- работу двух клиентов, очереди и одновременных арен;
+- общую очередь и шесть одновременных комнат;
+- полный последовательный переход комнаты `Free → Waiting → Countdown → Active → Result → Free`, timeout ожидания, выход через `ExitPrompt` и реванш;
 - симуляцию Heartbeat, сетевую физику и network ownership во время матча;
 - корректность/матрицу collision groups в многопользовательской физике, возврат посторонних, movement envelope и фактическую длительность Dash;
 - голевой debounce в реальной физике, таймер, overtime или rematch;

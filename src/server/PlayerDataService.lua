@@ -29,7 +29,7 @@ export type Service = typeof(setmetatable(
 	{} :: {
 		config: any,
 		remotes: any,
-		store: GlobalDataStore,
+		store: GlobalDataStore?,
 		profiles: { [Player]: PlayerData },
 		loading: { [Player]: boolean },
 		loadFailed: { [Player]: boolean },
@@ -206,11 +206,25 @@ function PlayerDataService.new(config: any, remotes: any): Service
 	if RunService:IsStudio() then
 		storeName ..= "_Studio"
 	end
+	local store: GlobalDataStore? = nil
+	local storeOk, storeOrError = pcall(function()
+		return DataStoreService:GetDataStore(storeName)
+	end)
+	if storeOk then
+		store = storeOrError
+	else
+		warn(
+			string.format(
+				"[Panna/Data] DataStore is unavailable; using session-only profiles: %s",
+				tostring(storeOrError)
+			)
+		)
+	end
 
 	return setmetatable({
 		config = config,
 		remotes = remotes,
-		store = DataStoreService:GetDataStore(storeName),
+		store = store,
 		profiles = {},
 		loading = {},
 		loadFailed = {},
@@ -276,15 +290,44 @@ function PlayerDataService._syncPresentation(self: Service, player: Player)
 end
 
 function PlayerDataService.LoadPlayer(self: Service, player: Player)
-	if
-		self.shuttingDown
-		or self.profiles[player]
-		or self.loading[player]
-		or self.removing[player]
-	then
+	if self.shuttingDown or self.removing[player] then
+		return
+	end
+	if self.profiles[player] then
+		if player.Parent then
+			player:SetAttribute("DataLoaded", true)
+			player:SetAttribute(
+				"DataSessionFallback",
+				self.loadFailed[player] == true or self.sessionUnsafe[player] == true
+			)
+			self:_syncPresentation(player)
+		end
+		return
+	end
+	if self.loading[player] then
 		return
 	end
 	self.loading[player] = true
+	local store = self.store
+	if not store then
+		self.profiles[player] = defaultData(self.config)
+		self.loading[player] = nil
+		self.loadFailed[player] = true
+		if player.Parent and not self.removing[player] and not self.shuttingDown then
+			player:SetAttribute("DataLoaded", true)
+			player:SetAttribute("DataSessionFallback", true)
+			self:_syncPresentation(player)
+			self.remotes.Effect:FireClient(player, {
+				kind = "Message",
+				title = "SESSION MODE",
+				text = "Profile storage is unavailable; ranked play is disabled.",
+			})
+		else
+			self.profiles[player] = nil
+			self.loadFailed[player] = nil
+		end
+		return
+	end
 	local leaseId = string.format("%s:%s", self.sessionId, HttpService:GenerateGUID(false))
 	self.leaseIds[player] = leaseId
 
@@ -297,7 +340,7 @@ function PlayerDataService.LoadPlayer(self: Service, player: Player)
 		end
 		local acquired = false
 		local ok, result = pcall(function()
-			return self.store:UpdateAsync(key, function(previous: any)
+			return store:UpdateAsync(key, function(previous: any)
 				acquired = false
 				local lockId, expiresAt = getSessionLock(previous)
 				if lockId and lockId ~= leaseId and expiresAt > os.time() then
@@ -386,6 +429,10 @@ function PlayerDataService._writeOwnedProfile(
 	data: PlayerData,
 	releaseLock: boolean
 ): boolean
+	local store = self.store
+	if not store then
+		return false
+	end
 	local leaseId = self.leaseIds[player]
 	if not leaseId then
 		return false
@@ -395,7 +442,7 @@ function PlayerDataService._writeOwnedProfile(
 		local wrote = false
 		local alreadyReleased = false
 		local ok, result = pcall(function()
-			return self.store:UpdateAsync(key, function(previous: any)
+			return store:UpdateAsync(key, function(previous: any)
 				wrote = false
 				alreadyReleased = false
 				local lockId = getSessionLock(previous)

@@ -1,4 +1,5 @@
 # Roblox Studio / Rojo output
+build/
 *.rbxl
 *.rbxlx
 *.rbxm

@@ -15,33 +15,51 @@ local PlayerDataService = require(script:WaitForChild("PlayerDataService"))
 local BallService = require(script:WaitForChild("BallService"))
 local MatchService = require(script:WaitForChild("MatchService"))
 local QueueService = require(script:WaitForChild("QueueService"))
+local RoomService = require(script:WaitForChild("RoomService"))
 
 local world = WorldBuilder.Build(Config)
 local remotes = RemoteRegistry.Create(Net)
 local limiter = RateLimiter.new(Config.Security.RemoteBurst, Config.Security.RemoteRefillPerSecond)
-local arenas = ArenaService.new(world)
+local arenas = ArenaService.new(world, Config)
 local dataService = PlayerDataService.new(Config, remotes)
 local ballService = BallService.new(Config, arenas)
 local matchService = MatchService.new(Config, arenas, ballService, dataService, remotes)
-local queueService = QueueService.new(arenas, matchService, remotes)
+local queueService = QueueService.new(Config, arenas, matchService, remotes)
+local roomService = RoomService.new(Config, arenas, matchService, queueService, remotes)
 
-matchService:SetArenaReleasedCallback(function()
+matchService:SetArenaReleasedCallback(function(_arena: any, home: Player, away: Player)
+	queueService:Refresh(home)
+	queueService:Refresh(away)
 	queueService:Process()
 end)
-matchService:SetRematchCallback(function(first: Player, second: Player)
-	queueService:EnqueuePair(first, second)
+matchService:SetRematchCallback(function(first: Player, second: Player, arena: any)
+	if not roomService:StartRematch(first, second, arena) then
+		queueService:EnqueuePair(first, second)
+	end
 end)
 
+local initializedPlayers: { [Player]: boolean } = {}
+
 local function initializePlayer(player: Player)
+	if initializedPlayers[player] then
+		return
+	end
+	initializedPlayers[player] = true
 	player:SetAttribute("InQueue", false)
+	player:SetAttribute("InRoomWaiting", false)
 	player:SetAttribute("InMatch", false)
 	player:SetAttribute("MatchId", "")
 	player:SetAttribute("ArenaId", "")
+	player:SetAttribute("SelectedArenaId", "")
 	player:SetAttribute("ControlsLocked", false)
 	player:SetAttribute("DataLoaded", false)
+	task.spawn(function()
+		dataService:LoadPlayer(player)
+	end)
 
 	player.CharacterAdded:Connect(function(character: Model)
 		matchService:HandleCharacterAdded(player, character)
+		roomService:HandleCharacterAdded(player, character)
 	end)
 end
 
@@ -67,6 +85,8 @@ remotes.QueueRequest.OnServerEvent:Connect(function(player: Player, request: any
 		queueService:Leave(player)
 	elseif request == "Rematch" then
 		matchService:RequestRematch(player)
+	elseif request == "Exit" then
+		roomService:Exit(player)
 	end
 end)
 
@@ -95,6 +115,8 @@ else
 end
 
 Players.PlayerRemoving:Connect(function(player: Player)
+	initializedPlayers[player] = nil
+	roomService:HandlePlayerRemoving(player)
 	queueService:HandlePlayerRemoving(player)
 	matchService:HandlePlayerRemoving(player)
 	ballService:RemovePlayer(player)
@@ -107,6 +129,8 @@ game:BindToClose(function()
 end)
 
 ballService:Start()
+roomService:Start()
 dataService:InitPlayers()
+workspace:SetAttribute("PannaServerReady", true)
 
 print(string.format("[Panna] Server %s ready with %d arenas", Config.Version, #arenas:GetAll()))

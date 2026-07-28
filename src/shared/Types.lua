@@ -1,6 +1,7 @@
 --!strict
 
 export type MatchState = "Countdown" | "Active" | "GoalPause" | "Overtime" | "Finished"
+export type RoomState = "Free" | "Waiting" | "Countdown" | "Active" | "Result"
 export type TeamSide = "Home" | "Away"
 
 export type PlayerStats = {
@@ -30,6 +31,15 @@ export type Arena = {
 	AwayGoal: BasePart,
 	Bounds: BasePart,
 	Ball: BasePart,
+	EntryZone: BasePart?,
+	ExitZone: BasePart?,
+	Barrier: BasePart?,
+	HomeWaitingSpawn: BasePart?,
+	AwayWaitingSpawn: BasePart?,
+	StreetSpawn: BasePart?,
+	EntryPrompt: ProximityPrompt?,
+	ExitPrompt: ProximityPrompt?,
+	State: RoomState,
 	Busy: boolean,
 	MatchId: string?,
 }

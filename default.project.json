@@ -25,10 +25,65 @@
         }
       }
     },
+    "Lighting": {
+      "$properties": {
+        "ClockTime": 20.2,
+        "Brightness": 2.2,
+        "ExposureCompensation": 0.1,
+        "Ambient": [0.1450980392, 0.1254901961, 0.2196078431],
+        "OutdoorAmbient": [0.0941176471, 0.1333333333, 0.2039215686],
+        "EnvironmentDiffuseScale": 0.38,
+        "EnvironmentSpecularScale": 0.72,
+        "GlobalShadows": true,
+        "ShadowSoftness": 0.3
+      },
+      "PannaAtmosphere": {
+        "$className": "Atmosphere",
+        "$properties": {
+          "Attributes": {
+            "PannaDistrictBuilderEffect": { "Bool": true }
+          },
+          "Density": 0.28,
+          "Offset": 0.08,
+          "Color": [0.4901960784, 0.5568627451, 0.7098039216],
+          "Decay": [0.1921568627, 0.1333333333, 0.3019607843],
+          "Glare": 0.08,
+          "Haze": 1.25
+        }
+      },
+      "PannaColorGrade": {
+        "$className": "ColorCorrectionEffect",
+        "$properties": {
+          "Attributes": {
+            "PannaDistrictBuilderEffect": { "Bool": true }
+          },
+          "Enabled": true,
+          "Brightness": -0.02,
+          "Contrast": 0.08,
+          "Saturation": 0.12,
+          "TintColor": [0.8784313725, 0.8941176471, 1.0]
+        }
+      },
+      "PannaNeonBloom": {
+        "$className": "BloomEffect",
+        "$properties": {
+          "Attributes": {
+            "PannaDistrictBuilderEffect": { "Bool": true }
+          },
+          "Enabled": true,
+          "Intensity": 0.34,
+          "Size": 28,
+          "Threshold": 1.15
+        }
+      }
+    },
     "Workspace": {
       "$properties": {
         "StreamingEnabled": true,
         "FallenPartsDestroyHeight": -100
+      },
+      "PannaDistrict": {
+        "$path": "src/world/PannaDistrict.model.json"
       }
     }
   }

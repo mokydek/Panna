@@ -50,6 +50,12 @@ type DashState = {
 	speedCapped: boolean,
 }
 
+type ShieldState = {
+	direction: Vector3,
+	startedAt: number,
+	expiresAt: number,
+}
+
 export type Service = typeof(setmetatable(
 	{} :: {
 		config: any,
@@ -58,6 +64,7 @@ export type Service = typeof(setmetatable(
 		lastActions: { [number]: { [string]: number } },
 		movementSamples: { [Player]: MovementSample },
 		dashes: { [Player]: DashState },
+		shields: { [Player]: ShieldState },
 		playerConnections: { [Player]: RBXScriptConnection },
 		characterConnections: { [Player]: RBXScriptConnection },
 		onPanna: ((Player, Player) -> ())?,
@@ -154,6 +161,7 @@ function BallService.new(config: any, arenas: any): Service
 		lastActions = {},
 		movementSamples = {},
 		dashes = {},
+		shields = {},
 		playerConnections = {},
 		characterConnections = {},
 		onPanna = nil,
@@ -387,6 +395,7 @@ function BallService._validateMovement(
 	if not root or not humanoid or humanoid.Health <= 0 or not character then
 		self.movementSamples[player] = nil
 		self.dashes[player] = nil
+		self.shields[player] = nil
 		return false
 	end
 
@@ -516,7 +525,8 @@ function BallService._ejectIntruders(self: Service, now: number)
 					player:SetAttribute("ArenaIntrusionCount", intrusions + 1)
 					self.movementSamples[player] = nil
 					self.dashes[player] = nil
-					self.arenas:ReturnToLobby(player)
+					self.shields[player] = nil
+					self.arenas:ReturnToStreet(state.arena, player)
 					self:_setCharacterCollisionGroup(player)
 				end
 			end
@@ -548,6 +558,7 @@ function BallService.AttachMatch(self: Service, match: any)
 	for _, player in { match.Home, match.Away } do
 		self.movementSamples[player] = nil
 		self.dashes[player] = nil
+		self.shields[player] = nil
 		self:_setCharacterCollisionGroup(player, state.participantCollisionGroup)
 	end
 	match.Arena.Ball:SetAttribute("MatchId", match.Id)
@@ -572,6 +583,7 @@ function BallService.DetachMatch(self: Service, match: any)
 	for _, player in { match.Home, match.Away } do
 		self.movementSamples[player] = nil
 		self.dashes[player] = nil
+		self.shields[player] = nil
 		self:_setCharacterCollisionGroup(player, SPECTATOR_COLLISION_GROUP)
 	end
 end
@@ -584,6 +596,7 @@ function BallService.SetActive(self: Service, match: any, active: boolean)
 			local now = os.clock()
 			for _, player in { match.Home, match.Away } do
 				self.dashes[player] = nil
+				self.shields[player] = nil
 				self:_teleportToParticipantSpawn(state, player, now)
 			end
 		else
@@ -592,6 +605,7 @@ function BallService.SetActive(self: Service, match: any, active: boolean)
 			for _, player in { match.Home, match.Away } do
 				self.movementSamples[player] = nil
 				self.dashes[player] = nil
+				self.shields[player] = nil
 			end
 		end
 	end
@@ -610,11 +624,15 @@ function BallService.ResetMatchBall(self: Service, match: any)
 	self.arenas:ResetBall(state.arena)
 end
 
-function BallService._setOwner(_self: Service, state: BallState, player: Player?)
+function BallService._setOwner(self: Service, state: BallState, player: Player?)
 	if state.owner == player then
 		return
 	end
+	local previousOwner = state.owner
 	state.owner = player
+	if previousOwner then
+		self.shields[previousOwner] = nil
+	end
 	state.arena.Ball:SetAttribute("OwnerUserId", if player then player.UserId else 0)
 end
 
@@ -628,6 +646,55 @@ function BallService._stateForPlayer(self: Service, player: Player): BallState?
 		return nil
 	end
 	return state
+end
+
+function BallService._activeShield(
+	self: Service,
+	state: BallState,
+	player: Player,
+	now: number
+): ShieldState?
+	local shield = self.shields[player]
+	if not shield then
+		return nil
+	end
+	local root = getRoot(player)
+	local humanoid = getHumanoid(player)
+	if
+		state.owner ~= player
+		or not state.active
+		or not state.match
+		or state.match.Ended
+		or player:GetAttribute("ControlsLocked") == true
+		or not root
+		or not humanoid
+		or humanoid.Health <= 0
+		or now > shield.expiresAt
+		or (root.Position - state.arena.Ball.Position).Magnitude
+			> self.config.Actions.ShieldRadius
+	then
+		self.shields[player] = nil
+		return nil
+	end
+	local facing = if humanoid.MoveDirection.Magnitude > 0.15
+		then humanoid.MoveDirection
+		else root.CFrame.LookVector
+	local currentDirection = safeHorizontalDirection(facing, shield.direction)
+	if currentDirection then
+		shield.direction = currentDirection
+	end
+	return shield
+end
+
+function BallService._stepShields(self: Service, now: number)
+	for player in self.shields do
+		local state = self:_stateForPlayer(player)
+		if not state then
+			self.shields[player] = nil
+		else
+			self:_activeShield(state, player, now)
+		end
+	end
 end
 
 function BallService._cooldown(
@@ -690,6 +757,10 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 	if player:GetAttribute("ControlsLocked") == true then
 		return false
 	end
+	if action == "Shield" and payload.active == false then
+		self.shields[player] = nil
+		return true
+	end
 
 	local root = getRoot(player)
 	local humanoid = getHumanoid(player)
@@ -716,6 +787,7 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		if not self:_cooldown(player, action, self.config.Actions.DashCooldown) then
 			return false
 		end
+		self.shields[player] = nil
 		local dashSeconds = math.max(0, self.config.Actions.DashSeconds)
 		self.dashes[player] = {
 			direction = direction,
@@ -731,6 +803,25 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		local currentY = root.AssemblyLinearVelocity.Y
 		root.AssemblyLinearVelocity = direction * self.config.Actions.DashSpeed
 			+ Vector3.new(0, currentY, 0)
+		return true
+	end
+
+	if action == "Shield" then
+		if payload.active ~= true then
+			return false
+		end
+		if
+			state.owner ~= player
+			or (state.arena.Ball.Position - root.Position).Magnitude > self.config.Actions.ShieldRadius
+			or not self:_cooldown(player, action, self.config.Actions.ShieldToggleCooldown)
+		then
+			return false
+		end
+		self.shields[player] = {
+			direction = direction,
+			startedAt = now,
+			expiresAt = now + self.config.Actions.ShieldMaxSeconds,
+		}
 		return true
 	end
 
@@ -800,8 +891,47 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		then
 			return false
 		end
+		local shield = self:_activeShield(state, other, now)
+		if shield then
+			local attackerOffset = root.Position - otherRoot.Position
+			local attackerDirection = Vector3.new(attackerOffset.X, 0, attackerOffset.Z)
+			if
+				attackerDirection.Magnitude > 0.05
+				and attackerDirection.Unit:Dot(shield.direction)
+					< self.config.Actions.ShieldTackleDot
+			then
+				return false
+			end
+		end
 		self:_releaseBall(state, player, direction * 25 + Vector3.new(0, 2.5, 0))
 		state.freeUntil = os.clock() + 0.18
+		return true
+	elseif action == "Feint" then
+		if
+			not ownsOrControls
+			or not self:_cooldown(player, action, self.config.Actions.FeintCooldown)
+		then
+			return false
+		end
+		local other = opponent(state.match, player)
+		local otherRoot = if other then getRoot(other) else nil
+		if
+			not otherRoot
+			or (otherRoot.Position - root.Position).Magnitude > self.config.Actions.FeintRadius
+		then
+			return false
+		end
+		self.shields[player] = nil
+		local rootVelocity =
+			Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+		self:_releaseBall(
+			state,
+			player,
+			direction * self.config.Actions.FeintSpeed
+				+ rootVelocity * 0.25
+				+ Vector3.new(0, 0.8, 0)
+		)
+		state.freeUntil = now + self.config.Actions.FeintFreeSeconds
 		return true
 	elseif action == "Skill" then
 		if
@@ -886,10 +1016,13 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 		return
 	end
 
+	local shield = self.shields[owner]
 	local moveDirection = humanoid.MoveDirection
-	local facing = if moveDirection.Magnitude > 0.15
-		then moveDirection.Unit
-		else root.CFrame.LookVector
+	local facing = if shield
+		then shield.direction
+		else if moveDirection.Magnitude > 0.15
+			then moveDirection.Unit
+			else root.CFrame.LookVector
 	local horizontalFacing = Vector3.new(facing.X, 0, facing.Z)
 	if horizontalFacing.Magnitude < 0.05 then
 		return
@@ -897,13 +1030,18 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 	horizontalFacing = horizontalFacing.Unit
 
 	local ball = state.arena.Ball
-	local target = root.Position + horizontalFacing * self.config.Ball.DribbleDistance
+	local distanceMultiplier = if shield
+		then self.config.Actions.ShieldDribbleDistanceMultiplier
+		else 1
+	local target = root.Position
+		+ horizontalFacing * self.config.Ball.DribbleDistance * distanceMultiplier
 	local desiredY = math.max(state.arena.BallSpawn.Position.Y, root.Position.Y - 2.25)
 	target = Vector3.new(target.X, desiredY, target.Z)
 	local displacement = target - ball.Position
 	local response = math.min(self.config.Ball.DribbleResponsiveness * deltaTime, 1)
 	local desiredVelocity = displacement * self.config.Ball.DribbleResponsiveness
-		+ Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z) * 0.45
+		+ Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+			* (if shield then 0.3 else 0.45)
 	if desiredVelocity.Magnitude > self.config.Ball.MaxSpeed * 0.55 then
 		desiredVelocity = desiredVelocity.Unit * self.config.Ball.MaxSpeed * 0.55
 	end
@@ -963,6 +1101,7 @@ function BallService._step(self: Service, deltaTime: number)
 	local now = os.clock()
 	self:_ejectIntruders(now)
 	self:_stepDashes(now)
+	self:_stepShields(now)
 	local ownersByBall: { [BasePart]: Player? } = {}
 	local lastTouchesByBall: { [BasePart]: Player? } = {}
 	for _, state in self.states do
@@ -992,6 +1131,7 @@ function BallService.RemovePlayer(self: Service, player: Player)
 	self.lastActions[player.UserId] = nil
 	self.movementSamples[player] = nil
 	self.dashes[player] = nil
+	self.shields[player] = nil
 	local playerConnection = self.playerConnections[player]
 	if playerConnection then
 		playerConnection:Disconnect()

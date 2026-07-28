@@ -10,6 +10,7 @@ QueueService.__index = QueueService
 
 export type Service = typeof(setmetatable(
 	{} :: {
+		config: any,
 		arenas: any,
 		matches: any,
 		remotes: any,
@@ -21,8 +22,9 @@ export type Service = typeof(setmetatable(
 	QueueService
 ))
 
-function QueueService.new(arenas: any, matches: any, remotes: any): Service
+function QueueService.new(config: any, arenas: any, matches: any, remotes: any): Service
 	return setmetatable({
+		config = config,
 		arenas = arenas,
 		matches = matches,
 		remotes = remotes,
@@ -35,18 +37,43 @@ end
 
 function QueueService.GetSnapshot(self: Service, player: Player): { [string]: any }
 	local position = table.find(self.queue, player)
-	local joined = self.membership[player] == true and position ~= nil
+	local globalJoined = self.membership[player] == true and position ~= nil
+	local roomWaiting = player:GetAttribute("InRoomWaiting") == true
+	local joined = globalJoined or roomWaiting
+	local selectedAttribute = player:GetAttribute("SelectedArenaId")
+	local matchArenaAttribute = player:GetAttribute("ArenaId")
+	local selectedArenaId = if type(selectedAttribute) == "string"
+			and selectedAttribute ~= ""
+		then selectedAttribute
+		else if type(matchArenaAttribute) == "string" then matchArenaAttribute else ""
+	local arena = if selectedArenaId ~= "" then self.arenas:GetById(selectedArenaId) else nil
+	local roomStatus = if arena then arena.State else if globalJoined then "Waiting" else "Free"
+	local occupantsAttribute = if arena then arena.Model:GetAttribute("Occupants") else nil
+	local occupants = if type(occupantsAttribute) == "number" then occupantsAttribute else 0
+	local capacity = if self.config.Rooms and type(self.config.Rooms.Capacity) == "number"
+		then self.config.Rooms.Capacity
+		else 2
 	local status = "Ready"
-	if joined then
+	if roomWaiting and arena then
+		status = string.format("Waiting in %s", self.arenas:GetDisplayName(arena))
+	elseif globalJoined then
 		status = if self.arenas:GetAvailable()
 			then "Searching for opponent"
 			else "Waiting for free arena"
+	elseif player:GetAttribute("InMatch") == true and arena then
+		status = string.format("Playing in %s", self.arenas:GetDisplayName(arena))
 	end
 	return {
 		joined = joined,
 		status = status,
 		position = position or 0,
 		count = #self.queue,
+		arenaId = selectedArenaId,
+		selectedArenaId = selectedArenaId,
+		arenaName = if arena then self.arenas:GetDisplayName(arena) else "",
+		roomStatus = roomStatus,
+		occupants = occupants,
+		capacity = capacity,
 	}
 end
 
@@ -110,8 +137,41 @@ function QueueService._canEnterRanked(self: Service, player: Player): boolean
 	return true
 end
 
+function QueueService.CanEnterRoom(self: Service, player: Player): boolean
+	if player:GetAttribute("InMatch") == true or player:GetAttribute("InRoomWaiting") == true then
+		return false
+	end
+	return self:IsEligible(player)
+end
+
+function QueueService.IsEligible(self: Service, player: Player): boolean
+	return self:_canEnterRanked(player)
+end
+
+function QueueService.PrepareRoomEntry(self: Service, player: Player): boolean
+	if not self:CanEnterRoom(player) then
+		return false
+	end
+	if self.membership[player] then
+		self:Leave(player)
+	end
+	return true
+end
+
+function QueueService.Contains(self: Service, player: Player): boolean
+	return self.membership[player] == true
+end
+
+function QueueService.Refresh(self: Service, player: Player)
+	self:_emit(player)
+end
+
 function QueueService.Join(self: Service, player: Player): boolean
-	if self.membership[player] or player:GetAttribute("InMatch") == true then
+	if
+		self.membership[player]
+		or player:GetAttribute("InMatch") == true
+		or player:GetAttribute("InRoomWaiting") == true
+	then
 		return false
 	end
 	if not self:_canEnterRanked(player) then
@@ -121,6 +181,7 @@ function QueueService.Join(self: Service, player: Player): boolean
 	self.membership[player] = true
 	table.insert(self.queue, player)
 	player:SetAttribute("InQueue", true)
+	player:SetAttribute("SelectedArenaId", "")
 	self:_emitAll()
 	self:Process()
 	return true
@@ -155,6 +216,7 @@ function QueueService._popValid(self: Service): Player?
 		if
 			player.Parent
 			and player:GetAttribute("InMatch") ~= true
+			and player:GetAttribute("InRoomWaiting") ~= true
 			and self:_canEnterRanked(player)
 		then
 			player:SetAttribute("InQueue", false)
@@ -216,11 +278,16 @@ function QueueService.Process(self: Service)
 	end)
 end
 
-function QueueService.EnqueuePair(self: Service, first: Player, second: Player)
+function QueueService.EnqueuePair(self: Service, first: Player, second: Player): boolean
 	local firstEligible = self:_canEnterRanked(first)
 	local secondEligible = self:_canEnterRanked(second)
-	if not firstEligible or not secondEligible then
-		return
+	if
+		not firstEligible
+		or not secondEligible
+		or first:GetAttribute("InRoomWaiting") == true
+		or second:GetAttribute("InRoomWaiting") == true
+	then
+		return false
 	end
 
 	if first.Parent and first:GetAttribute("InMatch") ~= true and not self.membership[first] then
@@ -235,6 +302,7 @@ function QueueService.EnqueuePair(self: Service, first: Player, second: Player)
 	end
 	self:_emitAll()
 	self:Process()
+	return self.membership[first] == true and self.membership[second] == true
 end
 
 function QueueService.HandlePlayerRemoving(self: Service, player: Player)

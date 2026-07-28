@@ -380,6 +380,10 @@ $requiredPaths = @(
     'stylua.toml',
     'README.md',
     'CHANGELOG.md',
+    'ASSETS.md',
+    'source.project.json',
+    'world.project.json',
+    'multiplayer.project.json',
     'docs/README.md',
     'docs/setup.md',
     'docs/architecture.md',
@@ -399,6 +403,7 @@ $requiredPaths = @(
     'src/server/RemoteRegistry.lua',
     'src/server/RateLimiter.lua',
     'src/server/ArenaService.lua',
+    'src/server/RoomService.lua',
     'src/server/PlayerDataService.lua',
     'src/server/QueueService.lua',
     'src/server/MatchService.lua',
@@ -407,7 +412,16 @@ $requiredPaths = @(
     'src/client/init.client.lua',
     'src/client/UIController.lua',
     'src/client/InputController.lua',
-    'scripts/studio-smoke.luau'
+    'src/world/PannaDistrict.model.json',
+    'scripts/studio-smoke.luau',
+    'scripts/multiplayer-smoke.luau',
+    'scripts/bake-editable-place.ps1',
+    'scripts/export-world-model.luau',
+    'scripts/extract-world-model.ps1',
+    'scripts/capture-map.luau',
+    'scripts/extract-captures.ps1',
+    'tests/multiplayer-server.server.lua',
+    'tests/multiplayer-client.client.lua'
 )
 
 foreach ($requiredPath in $requiredPaths) {
@@ -420,29 +434,43 @@ if (@($requiredPaths | Where-Object { -not (Test-Path -LiteralPath (Join-Path $r
     Add-Pass 'All required paths exist.'
 }
 
-$projectFile = Join-Path $root 'default.project.json'
-if (Test-Path -LiteralPath $projectFile -PathType Leaf) {
+$projectSpecifications = @(
+    @{ Path = 'default.project.json'; DataModelRoot = $true },
+    @{ Path = 'source.project.json'; DataModelRoot = $true },
+    @{ Path = 'multiplayer.project.json'; DataModelRoot = $true },
+    @{ Path = 'world.project.json'; DataModelRoot = $false }
+)
+
+foreach ($projectSpecification in $projectSpecifications) {
+    $projectPath = [string] $projectSpecification.Path
+    $projectFile = Join-Path $root $projectPath
+    if (-not (Test-Path -LiteralPath $projectFile -PathType Leaf)) {
+        continue
+    }
+
     try {
         $project = Get-Content -LiteralPath $projectFile -Raw | ConvertFrom-Json
         if ($null -eq $project.tree) {
-            Add-Failure 'default.project.json does not contain tree.'
+            Add-Failure "$projectPath does not contain tree."
         }
         else {
-            $rootClass = $project.tree.PSObject.Properties['$className']
-            if ($null -eq $rootClass -or $rootClass.Value -ne 'DataModel') {
-                Add-Failure 'The default.project.json tree root must have $className = DataModel.'
+            if ([bool] $projectSpecification.DataModelRoot) {
+                $rootClass = $project.tree.PSObject.Properties['$className']
+                if ($null -eq $rootClass -or $rootClass.Value -ne 'DataModel') {
+                    Add-Failure "The $projectPath tree root must have `$className = DataModel."
+                }
             }
-            Test-RojoNode -Node $project.tree -JsonLocation 'tree'
+            Test-RojoNode -Node $project.tree -JsonLocation "$projectPath.tree"
         }
 
         if ([string]::IsNullOrWhiteSpace([string] $project.name)) {
-            Add-Failure 'default.project.json must have a non-empty name.'
+            Add-Failure "$projectPath must have a non-empty name."
         }
 
-        Add-Pass 'default.project.json parses as JSON.'
+        Add-Pass "$projectPath parses as JSON."
     }
     catch {
-        Add-Failure "default.project.json failed to parse: $($_.Exception.Message)"
+        Add-Failure "$projectPath failed to parse: $($_.Exception.Message)"
     }
 }
 

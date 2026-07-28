@@ -8,6 +8,17 @@ local Workspace = game:GetService("Workspace")
 
 local LOCAL_PLAYER = Players.LocalPlayer
 
+local ACTION_ORDER = table.freeze({ "Kick", "Pass", "Feint", "Skill", "Tackle", "Shield", "Dash" })
+local ACTION_PRESENTATION = table.freeze({
+	Kick = table.freeze({ title = "SHOT", keyboard = "LMB / E", gamepad = "R2" }),
+	Pass = table.freeze({ title = "PASS", keyboard = "Q", gamepad = "X" }),
+	Feint = table.freeze({ title = "FEINT", keyboard = "V", gamepad = "R1" }),
+	Tackle = table.freeze({ title = "TACKLE", keyboard = "F", gamepad = "B" }),
+	Skill = table.freeze({ title = "PANNA", keyboard = "R", gamepad = "Y" }),
+	Shield = table.freeze({ title = "SHIELD", keyboard = "HOLD C", gamepad = "HOLD L2" }),
+	Dash = table.freeze({ title = "DASH", keyboard = "SHIFT", gamepad = "L1" }),
+})
+
 local COLORS = table.freeze({
 	Background = Color3.fromRGB(8, 12, 19),
 	Panel = Color3.fromRGB(17, 24, 34),
@@ -17,6 +28,7 @@ local COLORS = table.freeze({
 	Cyan = Color3.fromRGB(36, 226, 255),
 	Pink = Color3.fromRGB(255, 61, 181),
 	Lime = Color3.fromRGB(157, 255, 71),
+	Active = Color3.fromRGB(22, 112, 126),
 	Warning = Color3.fromRGB(255, 188, 52),
 	Danger = Color3.fromRGB(255, 76, 92),
 })
@@ -146,6 +158,62 @@ local function readableStatus(status: string): string
 	return known[normalized] or string.upper(string.gsub(status, "_", " "))
 end
 
+local function readableArena(value: string): string
+	if value == "" then
+		return "NO COURT SELECTED"
+	end
+	return string.upper(string.gsub(value, "_", " "))
+end
+
+local function readArenaState(source: any): (string, string, number, number, string)
+	local nested = read(source, "arena", "Arena", "selectedArena", "SelectedArena", "room", "Room")
+	local arenaSource = if typeof(nested) == "table" then nested else source
+	local nestedId = if typeof(nested) == "string" then nested else ""
+	local arenaId = readString(
+		arenaSource,
+		nestedId,
+		"arenaId",
+		"ArenaId",
+		"selectedArenaId",
+		"SelectedArenaId",
+		"roomId",
+		"RoomId"
+	)
+	if arenaId == "" and typeof(nested) == "table" then
+		arenaId = readString(arenaSource, "", "id", "Id")
+	end
+	local arenaName = readString(
+		arenaSource,
+		arenaId,
+		"arenaName",
+		"ArenaName",
+		"roomName",
+		"RoomName",
+		"displayName",
+		"DisplayName"
+	)
+	if typeof(nested) == "table" then
+		local nestedName = readString(arenaSource, "", "name", "Name")
+		if nestedName ~= "" then
+			arenaName = nestedName
+		end
+	end
+	local occupants = readNumber(
+		arenaSource,
+		0,
+		"occupants",
+		"Occupants",
+		"playersInRoom",
+		"PlayersInRoom",
+		"occupied",
+		"Occupied"
+	)
+	local capacity = readNumber(arenaSource, 2, "capacity", "Capacity", "maxPlayers", "MaxPlayers")
+	local roomStatus =
+		readString(arenaSource, "", "roomStatus", "RoomStatus", "arenaStatus", "ArenaStatus")
+	return arenaId, arenaName, math.max(0, occupants), math.max(1, capacity), roomStatus
+end
+
 type ControllerFields = {
 	Gui: ScreenGui,
 	TopBar: Frame,
@@ -154,9 +222,12 @@ type ControllerFields = {
 	LevelValue: TextLabel,
 	RatingValue: TextLabel,
 	QueueCard: Frame,
+	QueueKicker: TextLabel,
+	QueueOccupancy: TextLabel,
 	QueueStatus: TextLabel,
 	QueueButton: TextButton,
 	MatchCard: Frame,
+	MatchArena: TextLabel,
 	MatchPhase: TextLabel,
 	HomeName: TextLabel,
 	AwayName: TextLabel,
@@ -166,21 +237,35 @@ type ControllerFields = {
 	PowerContainer: Frame,
 	PowerFill: Frame,
 	PowerValue: TextLabel,
+	ActionBar: Frame,
+	ActionWidgets: { [string]: any },
+	ScreenFlash: Frame,
 	Notification: CanvasGroup,
 	NotificationAccent: Frame,
 	NotificationTitle: TextLabel,
 	NotificationBody: TextLabel,
 	RematchButton: TextButton,
+	ResultExitButton: TextButton,
+	LeaveMatchButton: TextButton,
 	_connections: { RBXScriptConnection },
 	_queueCallback: ((string) -> ())?,
 	_queueJoined: boolean,
 	_queuePending: boolean,
 	_matchVisible: boolean,
 	_matchState: string,
+	_selectedArena: string,
+	_isTouchLayout: boolean,
+	_exitArmToken: number,
+	_exitArmedUntil: number,
 	_localDeadline: number?,
 	_serverDeadline: number?,
 	_notificationToken: number,
 	_notificationTween: Tween?,
+	_flashTween: Tween?,
+	_shakeEndsAt: number,
+	_shakeStrength: number,
+	_shakeHumanoid: Humanoid?,
+	_shakeBaseOffset: Vector3?,
 	_destroyed: boolean,
 }
 
@@ -220,6 +305,17 @@ function UIController.new(): UIController
 	gui.ResetOnSpawn = false
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	gui.Parent = playerGui
+
+	local screenFlash = Instance.new("Frame")
+	screenFlash.Name = "ImpactFlash"
+	screenFlash.Active = false
+	screenFlash.BackgroundColor3 = COLORS.Cyan
+	screenFlash.BackgroundTransparency = 1
+	screenFlash.BorderSizePixel = 0
+	screenFlash.Size = UDim2.fromScale(1, 1)
+	screenFlash.Visible = false
+	screenFlash.ZIndex = 100
+	screenFlash.Parent = gui
 
 	local topBar = Instance.new("Frame")
 	topBar.Name = "TopBar"
@@ -289,6 +385,13 @@ function UIController.new(): UIController
 	matchConstraint.MinSize = Vector2.new(300, 112)
 	matchConstraint.Parent = matchCard
 
+	local matchArena =
+		makeLabel(matchCard, "Arena", "COURT --", Enum.Font.GothamBold, 9, COLORS.Muted)
+	matchArena.Position = UDim2.fromOffset(18, 8)
+	matchArena.Size = UDim2.new(0.28, -18, 0, 14)
+	matchArena.TextTruncate = Enum.TextTruncate.AtEnd
+	matchArena.TextXAlignment = Enum.TextXAlignment.Left
+
 	local matchPhase =
 		makeLabel(matchCard, "Phase", "1V1 • ACTIVE", Enum.Font.GothamBold, 10, COLORS.Cyan)
 	matchPhase.AnchorPoint = Vector2.new(0.5, 0)
@@ -337,6 +440,15 @@ function UIController.new(): UIController
 	timer.Size = UDim2.fromScale(1, 1)
 	timer.TextXAlignment = Enum.TextXAlignment.Center
 
+	local leaveMatchButton = makeButton(matchCard, "LeaveMatchButton", "EXIT")
+	leaveMatchButton.AnchorPoint = Vector2.new(1, 0)
+	leaveMatchButton.BackgroundColor3 = COLORS.PanelLight
+	leaveMatchButton.Position = UDim2.new(1, -10, 0, 8)
+	leaveMatchButton.Size = UDim2.fromOffset(78, 24)
+	leaveMatchButton.TextColor3 = COLORS.Text
+	leaveMatchButton.TextSize = 10
+	leaveMatchButton.Visible = false
+
 	local queueCard = Instance.new("Frame")
 	queueCard.Name = "QueueCard"
 	queueCard.AnchorPoint = Vector2.new(0.5, 1)
@@ -344,21 +456,35 @@ function UIController.new(): UIController
 	queueCard.BackgroundTransparency = 0.04
 	queueCard.BorderSizePixel = 0
 	queueCard.Position = UDim2.new(0.5, 0, 1, -24)
-	queueCard.Size = UDim2.new(1, -32, 0, 94)
+	queueCard.Size = UDim2.new(1, -32, 0, 108)
 	queueCard.Parent = gui
 	addCorner(queueCard, 16)
 	addStroke(queueCard, COLORS.Cyan, 0.55)
 
 	local queueConstraint = Instance.new("UISizeConstraint")
-	queueConstraint.MaxSize = Vector2.new(370, 94)
-	queueConstraint.MinSize = Vector2.new(280, 94)
+	queueConstraint.MaxSize = Vector2.new(390, 108)
+	queueConstraint.MinSize = Vector2.new(280, 108)
 	queueConstraint.Parent = queueCard
 
-	local queueKicker =
-		makeLabel(queueCard, "Kicker", "QUICK MATCH • 1V1", Enum.Font.GothamBold, 10, COLORS.Pink)
+	local queueKicker = makeLabel(
+		queueCard,
+		"Kicker",
+		"WALK INTO A 1V1 COURT",
+		Enum.Font.GothamBold,
+		10,
+		COLORS.Pink
+	)
 	queueKicker.Position = UDim2.fromOffset(14, 10)
-	queueKicker.Size = UDim2.new(1, -28, 0, 13)
+	queueKicker.Size = UDim2.new(1, -92, 0, 13)
+	queueKicker.TextTruncate = Enum.TextTruncate.AtEnd
 	queueKicker.TextXAlignment = Enum.TextXAlignment.Left
+
+	local queueOccupancy =
+		makeLabel(queueCard, "Occupancy", "OPEN", Enum.Font.GothamBlack, 10, COLORS.Cyan)
+	queueOccupancy.AnchorPoint = Vector2.new(1, 0)
+	queueOccupancy.Position = UDim2.new(1, -14, 0, 10)
+	queueOccupancy.Size = UDim2.fromOffset(70, 13)
+	queueOccupancy.TextXAlignment = Enum.TextXAlignment.Right
 
 	local queueStatus = makeLabel(
 		queueCard,
@@ -368,14 +494,14 @@ function UIController.new(): UIController
 		11,
 		COLORS.Muted
 	)
-	queueStatus.Position = UDim2.fromOffset(14, 26)
+	queueStatus.Position = UDim2.fromOffset(14, 31)
 	queueStatus.Size = UDim2.new(1, -28, 0, 16)
 	queueStatus.TextTruncate = Enum.TextTruncate.AtEnd
 	queueStatus.TextXAlignment = Enum.TextXAlignment.Left
 
 	local queueButton = makeButton(queueCard, "QueueButton", "CONNECTING...")
-	queueButton.Position = UDim2.fromOffset(14, 51)
-	queueButton.Size = UDim2.new(1, -28, 0, 32)
+	queueButton.Position = UDim2.fromOffset(14, 62)
+	queueButton.Size = UDim2.new(1, -28, 0, 35)
 	queueButton.Active = false
 
 	local powerContainer = Instance.new("Frame")
@@ -393,7 +519,7 @@ function UIController.new(): UIController
 
 	local powerConstraint = Instance.new("UISizeConstraint")
 	powerConstraint.MaxSize = Vector2.new(390, 38)
-	powerConstraint.MinSize = Vector2.new(240, 38)
+	powerConstraint.MinSize = Vector2.new(200, 32)
 	powerConstraint.Parent = powerContainer
 
 	local powerTrack = Instance.new("Frame")
@@ -423,12 +549,92 @@ function UIController.new(): UIController
 	})
 	powerGradient.Parent = powerFill
 
+	local powerCaption =
+		makeLabel(powerTrack, "Caption", "SHOT POWER", Enum.Font.GothamBlack, 9, COLORS.Text)
+	powerCaption.Position = UDim2.fromOffset(8, 0)
+	powerCaption.Size = UDim2.new(1, -16, 1, 0)
+	powerCaption.TextXAlignment = Enum.TextXAlignment.Left
+	powerCaption.ZIndex = 2
+
 	local powerValue =
 		makeLabel(powerContainer, "Value", "0%", Enum.Font.GothamBlack, 13, COLORS.Text)
 	powerValue.AnchorPoint = Vector2.new(1, 0)
 	powerValue.Position = UDim2.new(1, -10, 0, 0)
 	powerValue.Size = UDim2.new(0, 60, 1, 0)
 	powerValue.TextXAlignment = Enum.TextXAlignment.Right
+
+	local actionBar = Instance.new("Frame")
+	actionBar.Name = "ActionBar"
+	actionBar.AnchorPoint = Vector2.new(0.5, 1)
+	actionBar.BackgroundTransparency = 1
+	actionBar.Position = UDim2.new(0.5, 0, 1, -18)
+	actionBar.Size = UDim2.fromOffset(660, 54)
+	actionBar.Visible = false
+	actionBar.Parent = gui
+
+	local actionScale = Instance.new("UIScale")
+	actionScale.Scale = 1
+	actionScale.Parent = actionBar
+
+	local actionLayout = Instance.new("UIListLayout")
+	actionLayout.FillDirection = Enum.FillDirection.Horizontal
+	actionLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	actionLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	actionLayout.Padding = UDim.new(0, 6)
+	actionLayout.Parent = actionBar
+
+	local actionWidgets: { [string]: any } = {}
+	for _, action in ACTION_ORDER do
+		local presentation = (ACTION_PRESENTATION :: any)[action]
+		local chip = Instance.new("Frame")
+		chip.Name = action
+		chip.BackgroundColor3 = COLORS.Panel
+		chip.BackgroundTransparency = 0.06
+		chip.BorderSizePixel = 0
+		chip.ClipsDescendants = true
+		chip.Size = UDim2.fromOffset(88, 50)
+		chip.Parent = actionBar
+		addCorner(chip, 11)
+		addStroke(chip, COLORS.Cyan, 0.72)
+
+		local cooldownFill = Instance.new("Frame")
+		cooldownFill.Name = "CooldownFill"
+		cooldownFill.AnchorPoint = Vector2.new(0, 1)
+		cooldownFill.BackgroundColor3 = COLORS.Background
+		cooldownFill.BackgroundTransparency = 0.18
+		cooldownFill.BorderSizePixel = 0
+		cooldownFill.Position = UDim2.fromScale(0, 1)
+		cooldownFill.Size = UDim2.fromScale(1, 0)
+		cooldownFill.ZIndex = 2
+		cooldownFill.Parent = chip
+
+		local title =
+			makeLabel(chip, "Title", presentation.title, Enum.Font.GothamBlack, 11, COLORS.Text)
+		title.Position = UDim2.fromOffset(8, 7)
+		title.Size = UDim2.new(1, -16, 0, 14)
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.ZIndex = 3
+
+		local key =
+			makeLabel(chip, "Binding", presentation.keyboard, Enum.Font.GothamBold, 9, COLORS.Cyan)
+		key.Position = UDim2.fromOffset(8, 27)
+		key.Size = UDim2.new(1, -16, 0, 12)
+		key.TextXAlignment = Enum.TextXAlignment.Left
+		key.ZIndex = 3
+
+		local cooldown = makeLabel(chip, "Cooldown", "", Enum.Font.Code, 13, COLORS.Warning)
+		cooldown.Position = UDim2.fromOffset(8, 20)
+		cooldown.Size = UDim2.new(1, -16, 0, 22)
+		cooldown.TextXAlignment = Enum.TextXAlignment.Right
+		cooldown.ZIndex = 4
+
+		actionWidgets[action] = {
+			Container = chip,
+			Fill = cooldownFill,
+			Binding = key,
+			Cooldown = cooldown,
+		}
+	end
 
 	local notification = Instance.new("CanvasGroup")
 	notification.Name = "Notification"
@@ -472,9 +678,17 @@ function UIController.new(): UIController
 
 	local rematchButton = makeButton(gui, "RematchButton", "REMATCH")
 	rematchButton.AnchorPoint = Vector2.new(0.5, 0.5)
-	rematchButton.Position = UDim2.new(0.5, 0, 0.52, 82)
-	rematchButton.Size = UDim2.fromOffset(180, 38)
+	rematchButton.Position = UDim2.new(0.5, -88, 0.52, 82)
+	rematchButton.Size = UDim2.fromOffset(164, 38)
 	rematchButton.Visible = false
+
+	local resultExitButton = makeButton(gui, "ResultExitButton", "EXIT COURT")
+	resultExitButton.AnchorPoint = Vector2.new(0.5, 0.5)
+	resultExitButton.BackgroundColor3 = COLORS.Danger
+	resultExitButton.Position = UDim2.new(0.5, 88, 0.52, 82)
+	resultExitButton.Size = UDim2.fromOffset(164, 38)
+	resultExitButton.TextColor3 = COLORS.Text
+	resultExitButton.Visible = false
 
 	local self = setmetatable({
 		Gui = gui,
@@ -484,9 +698,12 @@ function UIController.new(): UIController
 		LevelValue = levelValue,
 		RatingValue = ratingValue,
 		QueueCard = queueCard,
+		QueueKicker = queueKicker,
+		QueueOccupancy = queueOccupancy,
 		QueueStatus = queueStatus,
 		QueueButton = queueButton,
 		MatchCard = matchCard,
+		MatchArena = matchArena,
 		MatchPhase = matchPhase,
 		HomeName = homeName,
 		AwayName = awayName,
@@ -496,21 +713,35 @@ function UIController.new(): UIController
 		PowerContainer = powerContainer,
 		PowerFill = powerFill,
 		PowerValue = powerValue,
+		ActionBar = actionBar,
+		ActionWidgets = actionWidgets,
+		ScreenFlash = screenFlash,
 		Notification = notification,
 		NotificationAccent = notificationAccent,
 		NotificationTitle = notificationTitle,
 		NotificationBody = notificationBody,
 		RematchButton = rematchButton,
+		ResultExitButton = resultExitButton,
+		LeaveMatchButton = leaveMatchButton,
 		_connections = {},
 		_queueCallback = nil,
 		_queueJoined = false,
 		_queuePending = false,
 		_matchVisible = false,
 		_matchState = "",
+		_selectedArena = "",
+		_isTouchLayout = UserInputService.TouchEnabled,
+		_exitArmToken = 0,
+		_exitArmedUntil = 0,
 		_localDeadline = nil,
 		_serverDeadline = nil,
 		_notificationToken = 0,
 		_notificationTween = nil,
+		_flashTween = nil,
+		_shakeEndsAt = 0,
+		_shakeStrength = 0,
+		_shakeHumanoid = nil,
+		_shakeBaseOffset = nil,
 		_destroyed = false,
 	}, UIController) :: UIController
 
@@ -529,15 +760,81 @@ function UIController.new(): UIController
 			self._queuePending = true
 			self.QueueButton.Active = false
 			self.QueueButton.Text = "SENDING..."
-			callback(if self._queueJoined then "Leave" else "Join")
+			local request = "Join"
+			if self._queueJoined then
+				request = if self._selectedArena ~= "" then "Exit" else "Leave"
+			end
+			callback(request)
 
 			task.delay(2, function()
 				if not self._destroyed and self._queuePending then
 					self._queuePending = false
 					self.QueueButton.Active = true
-					self.QueueButton.Text = if self._queueJoined then "LEAVE QUEUE" else "JOIN 1V1"
+					if self._queueJoined then
+						self.QueueButton.Text = if self._selectedArena ~= ""
+							then "LEAVE COURT QUEUE"
+							else "LEAVE QUICK QUEUE"
+					else
+						self.QueueButton.Text = "QUICK JOIN ANY COURT"
+					end
 				end
 			end)
+		end)
+	)
+
+	table.insert(
+		self._connections,
+		resultExitButton.Activated:Connect(function()
+			if self._destroyed or not self.ResultExitButton.Active then
+				return
+			end
+			local callback = self._queueCallback
+			if callback == nil then
+				return
+			end
+			self.ResultExitButton.Active = false
+			self.ResultExitButton.Text = "LEAVING..."
+			callback("Exit")
+		end)
+	)
+
+	table.insert(
+		self._connections,
+		leaveMatchButton.Activated:Connect(function()
+			if self._destroyed or not self.LeaveMatchButton.Active then
+				return
+			end
+			local callback = self._queueCallback
+			if callback == nil then
+				return
+			end
+
+			local now = os.clock()
+			if now > self._exitArmedUntil then
+				self._exitArmToken += 1
+				local token = self._exitArmToken
+				self._exitArmedUntil = now + 3
+				self.LeaveMatchButton.Text = "CONFIRM"
+				self.LeaveMatchButton.BackgroundColor3 = COLORS.Danger
+				local exitWarning = if self._matchState == "Countdown"
+					then "PRESS EXIT AGAIN TO CANCEL THIS MATCH."
+					else "PRESS EXIT AGAIN. AN ACTIVE MATCH COUNTS AS A FORFEIT."
+				self:ShowNotification("LEAVE THE COURT?", exitWarning, COLORS.Warning, 3)
+				task.delay(3, function()
+					if not self._destroyed and token == self._exitArmToken then
+						self._exitArmedUntil = 0
+						self.LeaveMatchButton.Text = "EXIT"
+						self.LeaveMatchButton.BackgroundColor3 = COLORS.PanelLight
+					end
+				end)
+				return
+			end
+
+			self._exitArmToken += 1
+			self._exitArmedUntil = 0
+			self.LeaveMatchButton.Active = false
+			self.LeaveMatchButton.Text = "LEAVING..."
+			callback("Exit")
 		end)
 	)
 
@@ -561,8 +858,20 @@ function UIController.new(): UIController
 		self._connections,
 		RunService.RenderStepped:Connect(function()
 			self:_updateTimer()
+			self:_updateImpact()
 		end)
 	)
+
+	local function updateInputPrompts()
+		local lastInputName = UserInputService:GetLastInputType().Name
+		local usingGamepad = string.find(lastInputName, "Gamepad", 1, true) ~= nil
+		for action, widget in self.ActionWidgets do
+			local presentation = (ACTION_PRESENTATION :: any)[action]
+			widget.Binding.Text = if usingGamepad
+				then presentation.gamepad
+				else presentation.keyboard
+		end
+	end
 
 	local function updateResponsive()
 		if self._destroyed then
@@ -570,13 +879,48 @@ function UIController.new(): UIController
 		end
 		local camera = Workspace.CurrentCamera
 		local width = if camera then camera.ViewportSize.X else 800
+		local height = if camera then camera.ViewportSize.Y else 600
 		local compact = width < 600
+		local short = height < 500
+		local touchLayout = UserInputService.TouchEnabled
+		self._isTouchLayout = touchLayout
 		self.Brand.Visible = not compact
 		stats.Position = if compact then UDim2.fromOffset(8, 0) else UDim2.fromOffset(176, 0)
 		stats.Size = if compact then UDim2.new(1, -16, 1, 0) else UDim2.new(1, -184, 1, 0)
 		homeName.TextSize = if compact then 13 else 16
 		awayName.TextSize = if compact then 13 else 16
 		score.TextSize = if compact then 25 else 29
+		matchPhase.Size = if compact then UDim2.new(0.34, 0, 0, 14) else UDim2.new(0.5, 0, 0, 14)
+		local leaveButtonWidth = if compact then 64 else 78
+		leaveMatchButton.Size = UDim2.fromOffset(leaveButtonWidth, 24)
+		leaveMatchButton.TextSize = if compact then 9 else 10
+		local touchGameplay = touchLayout and self:IsGameplayActive()
+		topBar.Visible = not touchGameplay
+		matchCard.Position =
+			UDim2.new(0.5, 0, 0, if touchGameplay then 12 else if compact then 76 else 80)
+		queueCard.Position = UDim2.new(0.5, 0, 1, if touchLayout then -14 else -24)
+		actionScale.Scale = math.min(1, math.max(0.5, (width - 20) / 660))
+		actionBar.Position = UDim2.new(0.5, 0, 1, if short then -10 else -18)
+		actionBar.Visible = self:IsGameplayActive() and not touchLayout
+
+		if touchLayout then
+			powerContainer.AnchorPoint = Vector2.new(0.5, 1)
+			powerContainer.Position = UDim2.new(0.5, 0, 1, if short then -185 else -205)
+			powerContainer.Size = UDim2.new(1, -100, 0, 34)
+		else
+			powerContainer.AnchorPoint = Vector2.new(0.5, 1)
+			powerContainer.Position = UDim2.new(0.5, 0, 1, -80)
+			powerContainer.Size = UDim2.new(1, -80, 0, 38)
+		end
+
+		local narrowResult = width < 410
+		local resultWidth = if narrowResult then 134 else 164
+		local resultOffset = if narrowResult then 72 else 88
+		rematchButton.Position = UDim2.new(0.5, -resultOffset, 0.52, 82)
+		rematchButton.Size = UDim2.fromOffset(resultWidth, 38)
+		resultExitButton.Position = UDim2.new(0.5, resultOffset, 0.52, 82)
+		resultExitButton.Size = UDim2.fromOffset(resultWidth, 38)
+		updateInputPrompts()
 	end
 
 	local cameraViewportConnection: RBXScriptConnection? = nil
@@ -600,6 +944,10 @@ function UIController.new(): UIController
 	)
 	table.insert(
 		self._connections,
+		UserInputService.LastInputTypeChanged:Connect(updateInputPrompts)
+	)
+	table.insert(
+		self._connections,
 		{
 			Disconnect = function()
 				if cameraViewportConnection then
@@ -616,8 +964,8 @@ end
 function UIController.SetQueueRequestHandler(self: UIController, callback: (string) -> ())
 	self._queueCallback = callback
 	self.QueueButton.Active = true
-	self.QueueButton.Text = "JOIN 1V1"
-	self.QueueStatus.Text = "READY FOR STREET FOOTBALL"
+	self.QueueButton.Text = "QUICK JOIN ANY COURT"
+	self.QueueStatus.Text = "CHOOSE A COURT AND STEP INTO ITS QUEUE ZONE"
 end
 
 function UIController.SetConnectionError(self: UIController, message: string)
@@ -637,18 +985,62 @@ end
 
 function UIController.SetQueueState(self: UIController, queue: any)
 	local joined = readBoolean(queue, false, "joined", "Joined", "inQueue", "InQueue")
-	local status = readString(queue, if joined then "queued" else "idle", "status", "Status")
+	local status = readString(
+		queue,
+		if joined then "queued" else "idle",
+		"status",
+		"Status",
+		"queueStatus",
+		"QueueStatus"
+	)
 	local position = readNumber(queue, 0, "position", "Position")
+	local arenaId, arenaName, occupants, capacity, roomStatus = readArenaState(queue)
+	if arenaId == "" then
+		local attribute = LOCAL_PLAYER:GetAttribute("SelectedArenaId")
+		if typeof(attribute) ~= "string" or attribute == "" then
+			attribute = LOCAL_PLAYER:GetAttribute("ArenaId")
+		end
+		if typeof(attribute) == "string" then
+			arenaId = attribute
+			if arenaName == "" then
+				arenaName = attribute
+			end
+		end
+	end
+	if roomStatus ~= "" and status == "idle" then
+		status = roomStatus
+	end
+	if occupants == 0 and joined and arenaId ~= "" then
+		occupants = 1
+	end
 
 	self._queueJoined = joined
 	self._queuePending = false
+	self._selectedArena = arenaId
 	self.QueueButton.Active = self._queueCallback ~= nil
-	self.QueueButton.Text = if joined then "LEAVE QUEUE" else "JOIN 1V1"
+	if joined then
+		self.QueueButton.Text = if arenaId ~= "" then "LEAVE COURT QUEUE" else "LEAVE QUICK QUEUE"
+	else
+		self.QueueButton.Text = "QUICK JOIN ANY COURT"
+	end
 	self.QueueButton.BackgroundColor3 = if joined then COLORS.Danger else COLORS.Cyan
+	self.QueueKicker.Text = if arenaName ~= ""
+		then readableArena(arenaName) .. "  /  1V1"
+		else "WALK INTO A 1V1 COURT"
+	self.QueueOccupancy.Text = if arenaName ~= "" or arenaId ~= ""
+		then string.format("%d / %d", math.floor(occupants), math.floor(capacity))
+		else "OPEN"
+	self.QueueOccupancy.TextColor3 = if occupants >= capacity then COLORS.Danger else COLORS.Cyan
 
 	local statusText = readableStatus(status)
 	if joined and position > 0 then
 		statusText ..= string.format("  •  #%d", math.floor(position))
+	elseif
+		arenaName == ""
+		and not joined
+		and (string.lower(status) == "idle" or string.lower(status) == "ready")
+	then
+		statusText = "CHOOSE A COURT AND STEP INTO ITS QUEUE ZONE"
 	end
 	self.QueueStatus.Text = statusText
 end
@@ -659,12 +1051,23 @@ function UIController.SetMatchState(self: UIController, match: any)
 		self._matchState = ""
 		self._localDeadline = nil
 		self._serverDeadline = nil
+		self.TopBar.Visible = true
 		self.MatchCard.Visible = false
 		self.PowerContainer.Visible = false
+		self.ActionBar.Visible = false
 		self.QueueCard.Visible = true
 		self.RematchButton.Visible = false
 		self.RematchButton.Active = true
 		self.RematchButton.Text = "REMATCH"
+		self.ResultExitButton.Visible = false
+		self.ResultExitButton.Active = true
+		self.ResultExitButton.Text = "EXIT COURT"
+		self.LeaveMatchButton.Visible = false
+		self.LeaveMatchButton.Active = true
+		self.LeaveMatchButton.Text = "EXIT"
+		self.LeaveMatchButton.BackgroundColor3 = COLORS.PanelLight
+		self._exitArmToken += 1
+		self._exitArmedUntil = 0
 		return
 	end
 
@@ -675,6 +1078,20 @@ function UIController.SetMatchState(self: UIController, match: any)
 	local awayScore = readNumber(match, 0, "awayScore", "AwayScore")
 	local homePannas = readNumber(match, 0, "homePannas", "HomePannas")
 	local awayPannas = readNumber(match, 0, "awayPannas", "AwayPannas")
+	local arenaId, arenaName = readArenaState(match)
+	if arenaId == "" then
+		arenaId = self._selectedArena
+	end
+	if arenaName == "" then
+		arenaName = arenaId
+	end
+	if arenaId == "" then
+		local attribute = LOCAL_PLAYER:GetAttribute("ArenaId")
+		if typeof(attribute) == "string" then
+			arenaId = attribute
+			arenaName = attribute
+		end
+	end
 	local scoreTable = read(match, "score", "Score")
 	if typeof(scoreTable) == "table" then
 		homeScore = readNumber(scoreTable, homeScore, "home", "Home")
@@ -687,7 +1104,25 @@ function UIController.SetMatchState(self: UIController, match: any)
 	self._matchState = state
 	self.MatchCard.Visible = true
 	self.QueueCard.Visible = false
-	self.PowerContainer.Visible = state == "Active" or state == "Overtime"
+	local gameplayActive = state == "Active" or state == "Overtime"
+	local camera = Workspace.CurrentCamera
+	local compact = camera ~= nil and camera.ViewportSize.X < 600
+	self.TopBar.Visible = not (self._isTouchLayout and gameplayActive)
+	self.MatchCard.Position = UDim2.new(
+		0.5,
+		0,
+		0,
+		if self._isTouchLayout and gameplayActive then 12 else if compact then 76 else 80
+	)
+	self.PowerContainer.Visible = gameplayActive
+	self.ActionBar.Visible = gameplayActive and not self._isTouchLayout
+	self.LeaveMatchButton.Visible = state ~= "Finished"
+	self.LeaveMatchButton.Active = true
+	self.LeaveMatchButton.Text = "EXIT"
+	self.LeaveMatchButton.BackgroundColor3 = COLORS.PanelLight
+	self._exitArmToken += 1
+	self._exitArmedUntil = 0
+	self.MatchArena.Text = if arenaName ~= "" then readableArena(arenaName) else "COURT --"
 	self.HomeName.Text = string.upper(homeName)
 	self.AwayName.Text = string.upper(awayName)
 	self.Score.Text = string.format("%d  :  %d", math.floor(homeScore), math.floor(awayScore))
@@ -726,8 +1161,12 @@ function UIController.SetMatchState(self: UIController, match: any)
 		self.RematchButton.Visible = true
 		self.RematchButton.Active = true
 		self.RematchButton.Text = "REMATCH"
+		self.ResultExitButton.Visible = true
+		self.ResultExitButton.Active = true
+		self.ResultExitButton.Text = "EXIT COURT"
 	else
 		self.RematchButton.Visible = false
+		self.ResultExitButton.Visible = false
 	end
 	self:_updateTimer()
 end
@@ -753,8 +1192,141 @@ function UIController.SetKickPower(self: UIController, power: number, charging: 
 	local safePower = math.clamp(power, 0, 1)
 	self.PowerFill.Size = UDim2.fromScale(safePower, 1)
 	self.PowerValue.Text = string.format("%d%%", math.floor(safePower * 100 + 0.5))
-	self.PowerContainer.Visible = self._matchVisible
-		and (charging or self._matchState == "Active" or self._matchState == "Overtime")
+	self.PowerContainer.Visible = self._matchVisible and (charging or self:IsGameplayActive())
+end
+
+function UIController.IsGameplayActive(self: UIController): boolean
+	local state = string.lower(self._matchState)
+	return self._matchVisible and (state == "active" or state == "live" or state == "overtime")
+end
+
+function UIController.SetActionCooldown(
+	self: UIController,
+	action: string,
+	remaining: number,
+	duration: number
+)
+	local widget = self.ActionWidgets[action]
+	if typeof(widget) ~= "table" or widget.Active == true then
+		return
+	end
+
+	local safeRemaining = math.max(0, remaining)
+	local ratio = if duration > 0 then math.clamp(safeRemaining / duration, 0, 1) else 0
+	widget.Fill.Size = UDim2.fromScale(1, ratio)
+	widget.Binding.Visible = safeRemaining <= 0.04
+	widget.Cooldown.Text = if safeRemaining > 0.04 then string.format("%.1f", safeRemaining) else ""
+	widget.Cooldown.TextColor3 = COLORS.Warning
+end
+
+function UIController.SetActionActive(self: UIController, action: string, active: boolean)
+	local widget = self.ActionWidgets[action]
+	if typeof(widget) ~= "table" then
+		return
+	end
+
+	widget.Active = active
+	widget.Container.BackgroundColor3 = if active then COLORS.Active else COLORS.Panel
+	widget.Cooldown.Text = if active then "HOLD" else ""
+	widget.Cooldown.TextColor3 = if active then COLORS.Background else COLORS.Warning
+	widget.Binding.Visible = not active
+	widget.Fill.Size = UDim2.fromScale(1, 0)
+end
+
+function UIController._restoreCameraOffset(self: UIController)
+	local humanoid = self._shakeHumanoid
+	local baseOffset = self._shakeBaseOffset
+	if humanoid and humanoid.Parent and baseOffset then
+		humanoid.CameraOffset = baseOffset
+	end
+	self._shakeHumanoid = nil
+	self._shakeBaseOffset = nil
+	self._shakeEndsAt = 0
+	self._shakeStrength = 0
+end
+
+function UIController._updateImpact(self: UIController)
+	if self._shakeEndsAt <= 0 then
+		return
+	end
+
+	local now = os.clock()
+	if now >= self._shakeEndsAt then
+		self:_restoreCameraOffset()
+		return
+	end
+
+	local humanoid = self._shakeHumanoid
+	local baseOffset = self._shakeBaseOffset
+	if not humanoid or not humanoid.Parent or not baseOffset then
+		self:_restoreCameraOffset()
+		return
+	end
+
+	local fade = math.clamp((self._shakeEndsAt - now) / 0.16, 0, 1)
+	local amplitude = self._shakeStrength * fade
+	humanoid.CameraOffset = baseOffset
+		+ Vector3.new(math.noise(now * 47, 0) * amplitude, math.noise(0, now * 53) * amplitude, 0)
+end
+
+function UIController.PlayImpact(self: UIController, kind: string, strength: number?)
+	if self._destroyed then
+		return
+	end
+
+	local normalized = string.lower(kind)
+	local duration = 0.14
+	local shakeStrength = 0.14
+	local flashColor = COLORS.Cyan
+	local flashTransparency = 0.8
+	if normalized == "panna" then
+		duration = 0.24
+		shakeStrength = 0.34
+		flashColor = COLORS.Pink
+		flashTransparency = 0.58
+	elseif normalized == "goal" then
+		duration = 0.2
+		shakeStrength = 0.25
+		flashColor = COLORS.Lime
+		flashTransparency = 0.68
+	elseif normalized == "kick" then
+		local safeStrength = math.clamp(strength or 1, 0, 1)
+		duration = 0.11 + safeStrength * 0.05
+		shakeStrength = 0.08 + safeStrength * 0.13
+		flashTransparency = 0.88 - safeStrength * 0.08
+	end
+
+	local now = os.clock()
+	if self._shakeEndsAt <= now then
+		local character = LOCAL_PLAYER.Character
+		local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
+		if humanoid then
+			self._shakeHumanoid = humanoid
+			self._shakeBaseOffset = humanoid.CameraOffset
+		end
+	end
+	self._shakeEndsAt = math.max(self._shakeEndsAt, now + duration)
+	self._shakeStrength = math.max(self._shakeStrength, shakeStrength)
+
+	if self._flashTween then
+		self._flashTween:Cancel()
+	end
+	self.ScreenFlash.BackgroundColor3 = flashColor
+	self.ScreenFlash.BackgroundTransparency = flashTransparency
+	self.ScreenFlash.Visible = true
+	local flashTween = TweenService:Create(
+		self.ScreenFlash,
+		TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 1 }
+	)
+	self._flashTween = flashTween
+	flashTween:Play()
+	flashTween.Completed:Once(function()
+		if not self._destroyed and self._flashTween == flashTween then
+			self.ScreenFlash.Visible = false
+			self._flashTween = nil
+		end
+	end)
 end
 
 function UIController.ShowNotification(
@@ -821,6 +1393,7 @@ function UIController.ApplyEffect(self: UIController, effect: any)
 	local explicitTitle = read(effect, "title", "Title")
 	local explicitText = readString(effect, "", "text", "Text", "message", "Message")
 	if kind == "goal" then
+		self:PlayImpact("Goal", 1)
 		local title = if typeof(explicitTitle) == "string" then explicitTitle else "GOAL!"
 		self:ShowNotification(
 			title,
@@ -829,6 +1402,7 @@ function UIController.ApplyEffect(self: UIController, effect: any)
 			2.6
 		)
 	elseif kind == "panna" then
+		self:PlayImpact("Panna", 1)
 		local title = if typeof(explicitTitle) == "string" then explicitTitle else "PANNA!"
 		self:ShowNotification(
 			title,
@@ -850,6 +1424,9 @@ function UIController.ApplyEffect(self: UIController, effect: any)
 		self.RematchButton.Visible = readBoolean(effect, true, "canRematch", "CanRematch")
 		self.RematchButton.Active = true
 		self.RematchButton.Text = "REMATCH"
+		self.ResultExitButton.Visible = true
+		self.ResultExitButton.Active = true
+		self.ResultExitButton.Text = "EXIT COURT"
 	else
 		local title = if typeof(explicitTitle) == "string" then explicitTitle else "PANNA STREET"
 		self:ShowNotification(title, explicitText, COLORS.Warning, 3.5)
@@ -868,10 +1445,32 @@ function UIController.ApplyState(self: UIController, payload: any, isSnapshot: b
 		self:SetStats(stats)
 	end
 
-	local queue = read(state, "queue", "Queue")
+	local queue = read(
+		state,
+		"queue",
+		"Queue",
+		"room",
+		"Room",
+		"selectedArena",
+		"SelectedArena",
+		"arenaSelection",
+		"ArenaSelection"
+	)
 	if typeof(queue) == "table" then
 		self:SetQueueState(queue)
-	elseif read(state, "joined", "Joined", "inQueue", "InQueue") ~= nil then
+	elseif
+		read(
+			state,
+			"joined",
+			"Joined",
+			"inQueue",
+			"InQueue",
+			"arenaId",
+			"ArenaId",
+			"selectedArenaId",
+			"SelectedArenaId"
+		) ~= nil
+	then
 		self:SetQueueState(state)
 	end
 
@@ -922,6 +1521,11 @@ function UIController.Destroy(self: UIController)
 		self._notificationTween:Cancel()
 		self._notificationTween = nil
 	end
+	if self._flashTween then
+		self._flashTween:Cancel()
+		self._flashTween = nil
+	end
+	self:_restoreCameraOffset()
 	for _, connection in self._connections do
 		connection:Disconnect()
 	end

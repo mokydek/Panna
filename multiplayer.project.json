@@ -1,0 +1,43 @@
+{
+  "name": "Panna Football Multiplayer Test",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "PannaShared": {
+        "$path": "src/shared"
+      }
+    },
+    "ServerScriptService": {
+      "PannaServer": {
+        "$path": "src/server"
+      },
+      "PannaMultiplayerSmokeServer": {
+        "$path": "tests/multiplayer-server.server.lua"
+      }
+    },
+    "StarterPlayer": {
+      "$properties": {
+        "CharacterWalkSpeed": 18,
+        "CharacterJumpHeight": 7.2,
+        "EnableMouseLockOption": true
+      },
+      "StarterPlayerScripts": {
+        "PannaClient": {
+          "$path": "src/client"
+        },
+        "PannaMultiplayerSmokeClient": {
+          "$path": "tests/multiplayer-client.client.lua"
+        }
+      }
+    },
+    "Workspace": {
+      "$properties": {
+        "StreamingEnabled": true,
+        "FallenPartsDestroyHeight": -100
+      },
+      "PannaDistrict": {
+        "$path": "src/world/PannaDistrict.model.json"
+      }
+    }
+  }
+}

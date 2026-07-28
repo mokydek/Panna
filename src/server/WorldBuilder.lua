@@ -24,12 +24,15 @@ type BallSettings = {
 }
 
 type Config = {
+	Version: string,
 	World: WorldSettings,
 	Ball: BallSettings,
 }
 
 local COLORS = table.freeze({
 	Asphalt = Color3.fromRGB(22, 25, 34),
+	Black = Color3.fromRGB(10, 12, 18),
+	Blue = Color3.fromRGB(56, 118, 255),
 	Concrete = Color3.fromRGB(43, 48, 60),
 	Cyan = Color3.fromRGB(34, 238, 255),
 	DarkGlass = Color3.fromRGB(20, 38, 51),
@@ -41,8 +44,25 @@ local COLORS = table.freeze({
 	Yellow = Color3.fromRGB(255, 226, 82),
 })
 
-local LIGHTING_EFFECT_ATTRIBUTE = "PannaWorldBuilderEffect"
-local ARENA_COUNT = 2
+local LIGHTING_EFFECT_ATTRIBUTE = "PannaDistrictBuilderEffect"
+local ARENA_COUNT = 6
+local ROOM_STATES = table.freeze({ "Free", "Waiting", "Countdown", "Active", "Result" })
+local ARENA_ACCENTS = table.freeze({
+	COLORS.Cyan,
+	COLORS.Pink,
+	COLORS.Green,
+	COLORS.Orange,
+	COLORS.Purple,
+	COLORS.Yellow,
+})
+local ARENA_NAMES = table.freeze({
+	"Concrete Cage",
+	"Neon Futsal",
+	"Club House",
+	"Industrial",
+	"Training Lab",
+	"Championship",
+})
 
 local WorldBuilder = {}
 
@@ -139,12 +159,135 @@ local function createBillboardSign(
 	return backing
 end
 
+local function createPrompt(
+	parent: BasePart,
+	name: string,
+	actionText: string,
+	objectText: string,
+	arenaId: string?,
+	roomAction: string?
+): ProximityPrompt
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = name
+	prompt.ActionText = actionText
+	prompt.ObjectText = objectText
+	prompt.KeyboardKeyCode = Enum.KeyCode.T
+	prompt.GamepadKeyCode = Enum.KeyCode.ButtonR3
+	prompt.HoldDuration = 0.15
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	if arenaId then
+		prompt:SetAttribute("ArenaId", arenaId)
+	end
+	if roomAction then
+		prompt:SetAttribute("RoomAction", roomAction)
+	end
+	prompt.Parent = parent
+	return prompt
+end
+
+local function createBoardLabel(
+	parent: Instance,
+	name: string,
+	text: string,
+	position: UDim2,
+	size: UDim2,
+	color: Color3,
+	font: Enum.Font
+): TextLabel
+	local label = Instance.new("TextLabel")
+	label.Name = name
+	label.BackgroundTransparency = 1
+	label.Position = position
+	label.Size = size
+	label.Font = font
+	label.Text = text
+	label.TextColor3 = color
+	label.TextScaled = true
+	label.TextStrokeColor3 = COLORS.Black
+	label.TextStrokeTransparency = 0.2
+	label.Parent = parent
+	return label
+end
+
+local function createStatusBoard(
+	parent: Instance,
+	origin: CFrame,
+	arenaId: string,
+	index: number,
+	roomTitle: string,
+	streetDirection: number,
+	world: WorldSettings,
+	accent: Color3
+): Part
+	local board = createPart(
+		parent,
+		"StatusBoard",
+		Vector3.new(0.55, 7.2, 13.5),
+		origin * CFrame.new(streetDirection * (world.ArenaWidth * 0.5 + 1.2), 7.2, -13),
+		COLORS.Black,
+		Enum.Material.Metal
+	)
+	board.CanCollide = false
+	board:SetAttribute("ArenaId", arenaId)
+	board:SetAttribute("BoardRole", "RoomStatus")
+	board:SetAttribute("RoomTitle", roomTitle)
+
+	local surface = Instance.new("SurfaceGui")
+	surface.Name = "Display"
+	surface.Face = if streetDirection > 0 then Enum.NormalId.Right else Enum.NormalId.Left
+	surface.AlwaysOnTop = false
+	surface.LightInfluence = 0
+	surface.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	surface.PixelsPerStud = 38
+	surface.Parent = board
+
+	local panel = Instance.new("Frame")
+	panel.Name = "Panel"
+	panel.BackgroundColor3 = COLORS.Black
+	panel.BackgroundTransparency = 0.08
+	panel.BorderSizePixel = 0
+	panel.Size = UDim2.fromScale(1, 1)
+	panel.Parent = surface
+
+	createBoardLabel(
+		panel,
+		"RoomLabel",
+		string.format("%02d  %s", index, string.upper(roomTitle)),
+		UDim2.fromScale(0.04, 0.05),
+		UDim2.fromScale(0.92, 0.2),
+		accent,
+		Enum.Font.GothamBlack
+	)
+	createBoardLabel(
+		panel,
+		"StateLabel",
+		"FREE",
+		UDim2.fromScale(0.04, 0.31),
+		UDim2.fromScale(0.92, 0.25),
+		COLORS.Green,
+		Enum.Font.GothamBold
+	)
+	createBoardLabel(
+		panel,
+		"ScoreLabel",
+		"0  :  0",
+		UDim2.fromScale(0.04, 0.62),
+		UDim2.fromScale(0.92, 0.24),
+		COLORS.White,
+		Enum.Font.GothamBlack
+	)
+	return board
+end
+
 local function addPointLight(part: BasePart, color: Color3, range: number, brightness: number)
 	local light = Instance.new("PointLight")
 	light.Color = color
 	light.Range = range
 	light.Brightness = brightness
-	light.Shadows = true
+	-- Six rooms plus the street use many practical lights. Disabling per-light
+	-- shadows keeps the evening identity without multiplying shadow-map cost.
+	light.Shadows = false
 	light.Parent = part
 end
 
@@ -223,7 +366,7 @@ local function createCenterCircle(parent: Instance, origin: CFrame, color: Color
 	circleModel.Parent = parent
 
 	local radius = 7
-	local segmentCount = 24
+	local segmentCount = 16
 	local segmentLength = (2 * math.pi * radius) / segmentCount + 0.06
 	for index = 1, segmentCount do
 		local angle = ((index - 0.5) / segmentCount) * 2 * math.pi
@@ -328,7 +471,12 @@ local function createGoalFrame(
 	)
 end
 
-local function createFence(parent: Instance, origin: CFrame, world: WorldSettings)
+local function createFence(
+	parent: Instance,
+	origin: CFrame,
+	world: WorldSettings,
+	streetDirection: number
+)
 	local model = Instance.new("Model")
 	model.Name = "Fence"
 	model.Parent = parent
@@ -336,26 +484,63 @@ local function createFence(parent: Instance, origin: CFrame, world: WorldSetting
 	local halfWidth = world.ArenaWidth * 0.5
 	local halfLength = world.ArenaLength * 0.5
 	local panelColor = COLORS.DarkGlass
+	local entranceWidth = 12
 
 	for _, xDirection in { -1, 1 } do
-		local sidePanel = createPart(
-			model,
-			if xDirection < 0 then "LeftPanel" else "RightPanel",
-			Vector3.new(0.38, world.FenceHeight, world.ArenaLength + 0.7),
-			origin * CFrame.new(xDirection * (halfWidth + 0.2), world.FenceHeight * 0.5, 0),
-			panelColor,
-			Enum.Material.Glass
-		)
-		sidePanel.Transparency = 0.58
-
-		createPart(
-			model,
-			if xDirection < 0 then "LeftNeonRail" else "RightNeonRail",
-			Vector3.new(0.3, 0.3, world.ArenaLength + 1),
-			origin * CFrame.new(xDirection * (halfWidth + 0.4), 0.45, 0),
-			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
-			Enum.Material.Neon
-		)
+		local sideName = if xDirection < 0 then "Left" else "Right"
+		local railColor = if xDirection < 0 then COLORS.Cyan else COLORS.Pink
+		if xDirection == streetDirection then
+			local segmentLength = (world.ArenaLength - entranceWidth) * 0.5
+			local segmentOffset = entranceWidth * 0.5 + segmentLength * 0.5
+			for _, zDirection in { -1, 1 } do
+				local suffix = if zDirection < 0 then "South" else "North"
+				local sidePanel = createPart(
+					model,
+					sideName .. "Panel" .. suffix,
+					Vector3.new(0.38, world.FenceHeight, segmentLength),
+					origin
+						* CFrame.new(
+							xDirection * (halfWidth + 0.2),
+							world.FenceHeight * 0.5,
+							zDirection * segmentOffset
+						),
+					panelColor,
+					Enum.Material.Glass
+				)
+				sidePanel.Transparency = 0.58
+				createPart(
+					model,
+					sideName .. "NeonRail" .. suffix,
+					Vector3.new(0.3, 0.3, segmentLength),
+					origin
+						* CFrame.new(
+							xDirection * (halfWidth + 0.4),
+							0.45,
+							zDirection * segmentOffset
+						),
+					railColor,
+					Enum.Material.Neon
+				)
+			end
+		else
+			local sidePanel = createPart(
+				model,
+				sideName .. "Panel",
+				Vector3.new(0.38, world.FenceHeight, world.ArenaLength + 0.7),
+				origin * CFrame.new(xDirection * (halfWidth + 0.2), world.FenceHeight * 0.5, 0),
+				panelColor,
+				Enum.Material.Glass
+			)
+			sidePanel.Transparency = 0.58
+			createPart(
+				model,
+				sideName .. "NeonRail",
+				Vector3.new(0.3, 0.3, world.ArenaLength + 1),
+				origin * CFrame.new(xDirection * (halfWidth + 0.4), 0.45, 0),
+				railColor,
+				Enum.Material.Neon
+			)
+		end
 	end
 
 	local endSegmentWidth = (world.ArenaWidth - world.GoalWidth) * 0.5
@@ -383,20 +568,323 @@ local function createFence(parent: Instance, origin: CFrame, world: WorldSetting
 	for index = 0, sidePostCount do
 		local z = -halfLength + (world.ArenaLength * index / sidePostCount)
 		for _, xDirection in { -1, 1 } do
+			if xDirection ~= streetDirection or math.abs(z) > entranceWidth * 0.5 + 0.5 then
+				createPart(
+					model,
+					string.format("SidePost_%d_%d", index, xDirection),
+					Vector3.new(0.5, world.FenceHeight + 0.8, 0.5),
+					origin
+						* CFrame.new(
+							xDirection * (halfWidth + 0.25),
+							(world.FenceHeight + 0.8) * 0.5,
+							z
+						),
+					COLORS.Concrete,
+					Enum.Material.Metal
+				)
+			end
+		end
+	end
+
+	for _, zDirection in { -1, 1 } do
+		createPart(
+			model,
+			if zDirection < 0 then "EntryPostSouth" else "EntryPostNorth",
+			Vector3.new(0.7, 6.5, 0.7),
+			origin
+				* CFrame.new(
+					streetDirection * (halfWidth + 0.25),
+					3.25,
+					zDirection * entranceWidth * 0.5
+				),
+			COLORS.Concrete,
+			Enum.Material.Metal
+		)
+	end
+end
+
+local function createWaitingMarker(
+	parent: Instance,
+	name: string,
+	cframe: CFrame,
+	arenaId: string,
+	teamSide: string
+): Part
+	local marker = createInvisibleMarker(parent, name, Vector3.new(4.5, 0.4, 4.5), cframe, false)
+	marker:SetAttribute("ArenaId", arenaId)
+	marker:SetAttribute("TeamSide", teamSide)
+	marker:SetAttribute("MarkerRole", "RoomWaitingSpawn")
+	return marker
+end
+
+local function createSpectatorStand(
+	parent: Instance,
+	origin: CFrame,
+	world: WorldSettings,
+	streetDirection: number,
+	arenaId: string,
+	accent: Color3
+)
+	local stand = Instance.new("Model")
+	stand.Name = "SpectatorStand"
+	stand.Parent = parent
+
+	local outerDirection = -streetDirection
+	local baseX = outerDirection * (world.ArenaWidth * 0.5 + 5.5)
+	createPart(
+		stand,
+		"StandBase",
+		Vector3.new(13, 0.8, 48),
+		origin * CFrame.new(baseX, 0.4, 0),
+		COLORS.Concrete,
+		Enum.Material.Concrete
+	)
+	for row = 1, 3 do
+		local rowX = baseX + outerDirection * ((row - 1) * 2.1)
+		createPart(
+			stand,
+			string.format("Tier_%d", row),
+			Vector3.new(2.2, row * 0.75, 44),
+			origin * CFrame.new(rowX, row * 0.375, 0),
+			if row % 2 == 0 then COLORS.Asphalt else COLORS.Concrete,
+			Enum.Material.Concrete
+		)
+		local bench = createPart(
+			stand,
+			string.format("Bench_%d", row),
+			Vector3.new(1.7, 0.35, 40),
+			origin * CFrame.new(rowX, row * 0.75 + 0.45, 0),
+			accent,
+			Enum.Material.Metal
+		)
+		bench:SetAttribute("SpectatorSeating", true)
+	end
+
+	local zone = createInvisibleMarker(
+		parent,
+		"SpectatorZone",
+		Vector3.new(13, 8, 48),
+		origin * CFrame.new(baseX, 4, 0),
+		true
+	)
+	zone:SetAttribute("ArenaId", arenaId)
+	zone:SetAttribute("ZoneType", "Spectator")
+end
+
+local function createRoomLifecycle(
+	model: Model,
+	index: number,
+	origin: CFrame,
+	world: WorldSettings,
+	arenaId: string,
+	roomTitle: string,
+	streetDirection: number,
+	accent: Color3
+)
+	local halfWidth = world.ArenaWidth * 0.5
+	local deckX = streetDirection * (halfWidth + 5.7)
+	local insideX = streetDirection * (halfWidth - 5.5)
+
+	local deck = createPart(
+		model,
+		"EntryDeck",
+		Vector3.new(11, 0.45, 16),
+		origin * CFrame.new(deckX, 0.23, 0),
+		COLORS.Concrete,
+		Enum.Material.Concrete
+	)
+	deck:SetAttribute("ArenaId", arenaId)
+	for _, zDirection in { -1, 1 } do
+		local side = if zDirection < 0 then "Home" else "Away"
+		local pad = createPart(
+			model,
+			side .. "WaitingPad",
+			Vector3.new(4.4, 0.12, 5.4),
+			origin * CFrame.new(deckX, 0.51, zDirection * 4.2),
+			if side == "Home" then COLORS.Cyan else COLORS.Pink,
+			Enum.Material.Neon
+		)
+		pad.CanCollide = false
+		pad.CanTouch = false
+		pad.CanQuery = false
+	end
+
+	createWaitingMarker(
+		model,
+		"HomeWaitingSpawn",
+		origin * CFrame.new(deckX, 0.55, -4.2),
+		arenaId,
+		"Home"
+	)
+	createWaitingMarker(
+		model,
+		"AwayWaitingSpawn",
+		origin * CFrame.new(deckX, 0.55, 4.2),
+		arenaId,
+		"Away"
+	)
+	local streetSpawn = createInvisibleMarker(
+		model,
+		"StreetSpawn",
+		Vector3.new(5, 0.4, 5),
+		origin * CFrame.new(streetDirection * (halfWidth + 13), 0.55, 0),
+		false
+	)
+	streetSpawn:SetAttribute("ArenaId", arenaId)
+	streetSpawn:SetAttribute("MarkerRole", "RoomStreetReturn")
+
+	local entryZone = createInvisibleMarker(
+		model,
+		"EntryZone",
+		Vector3.new(11, 4, 16),
+		origin * CFrame.new(deckX, 2, 0),
+		true
+	)
+	entryZone:SetAttribute("ArenaId", arenaId)
+	entryZone:SetAttribute("RoomAction", "Enter")
+	createPrompt(
+		entryZone,
+		"EntryPrompt",
+		"ENTER ROOM",
+		string.format("%s  •  FREE", string.upper(roomTitle)),
+		arenaId,
+		"Enter"
+	)
+
+	local exitZone = createInvisibleMarker(
+		model,
+		"ExitZone",
+		Vector3.new(8, 4, 10),
+		origin * CFrame.new(insideX, 2, 0),
+		true
+	)
+	exitZone:SetAttribute("ArenaId", arenaId)
+	exitZone:SetAttribute("RoomAction", "Exit")
+	createPrompt(exitZone, "ExitPrompt", "LEAVE ROOM", "RETURN TO DISTRICT", arenaId, "Exit")
+
+	local barrier = createPart(
+		model,
+		"Barrier",
+		Vector3.new(0.5, 5.5, 11.8),
+		origin * CFrame.new(streetDirection * (halfWidth + 0.2), 2.75, 0),
+		accent,
+		Enum.Material.ForceField
+	)
+	barrier.Transparency = 0.58
+	barrier.CanCollide = false
+	barrier.CanTouch = false
+	barrier:SetAttribute("ArenaId", arenaId)
+	barrier:SetAttribute("BarrierRole", "RoomGate")
+	barrier:SetAttribute("Closed", false)
+
+	createStatusBoard(model, origin, arenaId, index, roomTitle, streetDirection, world, accent)
+	createSpectatorStand(model, origin, world, streetDirection, arenaId, accent)
+end
+
+local function createArenaThemeDecor(
+	parent: Instance,
+	index: number,
+	origin: CFrame,
+	world: WorldSettings,
+	streetDirection: number,
+	accent: Color3
+)
+	local theme = Instance.new("Model")
+	theme.Name = string.gsub(ARENA_NAMES[index], "%s+", "") .. "Theme"
+	theme:SetAttribute("ThemeName", ARENA_NAMES[index])
+	theme.Parent = parent
+	local halfWidth = world.ArenaWidth * 0.5
+	local outerDirection = -streetDirection
+
+	if index == 1 then
+		for _, zDirection in { -1, 1 } do
 			createPart(
-				model,
-				string.format("SidePost_%d_%d", index, xDirection),
-				Vector3.new(0.5, world.FenceHeight + 0.8, 0.5),
-				origin
-					* CFrame.new(
-						xDirection * (halfWidth + 0.25),
-						(world.FenceHeight + 0.8) * 0.5,
-						z
-					),
-				COLORS.Concrete,
-				Enum.Material.Metal
+				theme,
+				if zDirection < 0 then "ConcreteButtressSouth" else "ConcreteButtressNorth",
+				Vector3.new(3.2, 10, 5.5),
+				origin * CFrame.new(outerDirection * (halfWidth + 1.8), 5, zDirection * 23),
+				Color3.fromRGB(68, 72, 78),
+				Enum.Material.Concrete
 			)
 		end
+	elseif index == 2 then
+		for _, zDirection in { -1, 1 } do
+			createPart(
+				theme,
+				if zDirection < 0 then "NeonCrossbeamSouth" else "NeonCrossbeamNorth",
+				Vector3.new(world.ArenaWidth + 5, 0.45, 0.45),
+				origin * CFrame.new(0, world.FenceHeight + 3, zDirection * 18),
+				accent,
+				Enum.Material.Neon
+			)
+		end
+	elseif index == 3 then
+		createPart(
+			theme,
+			"ClubFacade",
+			Vector3.new(1.2, 9, 28),
+			origin * CFrame.new(outerDirection * (halfWidth + 8.5), 4.5, 0),
+			Color3.fromRGB(92, 62, 45),
+			Enum.Material.WoodPlanks
+		)
+		createPart(
+			theme,
+			"ClubCanopy",
+			Vector3.new(10, 0.65, 30),
+			origin * CFrame.new(outerDirection * (halfWidth + 4.5), 9, 0),
+			COLORS.Green,
+			Enum.Material.Metal
+		)
+	elseif index == 4 then
+		for _, zDirection in { -1, 1 } do
+			local pipe = createPart(
+				theme,
+				if zDirection < 0 then "IndustrialPipeSouth" else "IndustrialPipeNorth",
+				Vector3.new(30, 2.2, 2.2),
+				origin * CFrame.new(outerDirection * (halfWidth + 7), 8, zDirection * 17),
+				Color3.fromRGB(112, 118, 128),
+				Enum.Material.Metal
+			)
+			pipe.Shape = Enum.PartType.Cylinder
+			pipe.CFrame *= CFrame.Angles(0, math.pi * 0.5, 0)
+		end
+	elseif index == 5 then
+		for panelIndex, z in { -18, 0, 18 } do
+			local panel = createPart(
+				theme,
+				string.format("LabPanel_%d", panelIndex),
+				Vector3.new(0.3, 5.5, 8),
+				origin * CFrame.new(outerDirection * (halfWidth + 1), 7, z),
+				if panelIndex % 2 == 0 then COLORS.Green else COLORS.Cyan,
+				Enum.Material.Neon
+			)
+			panel.Transparency = 0.32
+			panel.CanCollide = false
+		end
+	elseif index == 6 then
+		for _, zDirection in { -1, 1 } do
+			createPart(
+				theme,
+				if zDirection < 0 then "ChampionshipBannerSouth" else "ChampionshipBannerNorth",
+				Vector3.new(0.45, 10, 5),
+				origin
+					* CFrame.new(
+						streetDirection * (halfWidth + 0.9),
+						world.FenceHeight - 2,
+						zDirection * 22
+					),
+				COLORS.Yellow,
+				Enum.Material.Neon
+			)
+		end
+		createPart(
+			theme,
+			"ChampionshipCrown",
+			Vector3.new(world.ArenaWidth + 4, 0.8, 0.8),
+			origin * CFrame.new(0, world.FenceHeight + 4.5, 0),
+			COLORS.Yellow,
+			Enum.Material.Neon
+		)
 	end
 end
 
@@ -408,16 +896,27 @@ local function createArena(
 	ballSettings: BallSettings
 ): Model
 	local arenaId = string.format("Arena_%d", index)
+	local roomTitle = ARENA_NAMES[index]
+	local districtSide = if origin.Position.X < 0 then "Left" else "Right"
+	local streetDirection = if districtSide == "Left" then 1 else -1
 	local model = Instance.new("Model")
 	model.Name = arenaId
 	model:SetAttribute("ArenaId", arenaId)
+	model:SetAttribute("ArenaState", ROOM_STATES[1])
 	model:SetAttribute("Busy", false)
+	model:SetAttribute("DisplayName", roomTitle)
+	model:SetAttribute("DistrictSide", districtSide)
+	model:SetAttribute("HomeUserId", 0)
 	model:SetAttribute("MatchId", "")
+	model:SetAttribute("AwayUserId", 0)
+	model:SetAttribute("RoomIndex", index)
+	model:SetAttribute("RoomTitle", roomTitle)
+	model:SetAttribute("WaitingCount", 0)
 	model.Parent = arenasFolder
 
 	local halfWidth = world.ArenaWidth * 0.5
 	local halfLength = world.ArenaLength * 0.5
-	local accent = if index % 2 == 1 then COLORS.Cyan else COLORS.Pink
+	local accent = ARENA_ACCENTS[((index - 1) % #ARENA_ACCENTS) + 1]
 
 	local floor = createPart(
 		model,
@@ -519,9 +1018,11 @@ local function createArena(
 
 	createGoalFrame(model, origin, "HomeGoal", 1, world, COLORS.Cyan)
 	createGoalFrame(model, origin, "AwayGoal", -1, world, COLORS.Pink)
-	createFence(model, origin, world)
+	createFence(model, origin, world, streetDirection)
 
 	createBall(model, "Ball", ballSpawn.CFrame, ballSettings, arenaId)
+	createRoomLifecycle(model, index, origin, world, arenaId, roomTitle, streetDirection, accent)
+	createArenaThemeDecor(model, index, origin, world, streetDirection, accent)
 
 	local decor = Instance.new("Model")
 	decor.Name = "Floodlights"
@@ -529,8 +1030,6 @@ local function createArena(
 	for _, corner in
 		{
 			Vector3.new(-halfWidth - 3, 0, -halfLength + 7),
-			Vector3.new(halfWidth + 3, 0, -halfLength + 7),
-			Vector3.new(-halfWidth - 3, 0, halfLength - 7),
 			Vector3.new(halfWidth + 3, 0, halfLength - 7),
 		}
 	do
@@ -547,7 +1046,7 @@ local function createArena(
 	createBillboardSign(
 		model,
 		"ArenaSign",
-		string.format("PANNA COURT %02d", index),
+		string.format("%02d  /  %s", index, string.upper(roomTitle)),
 		origin * CFrame.new(0, world.FenceHeight + 4, -halfLength - 2),
 		accent,
 		19
@@ -562,7 +1061,7 @@ local function createTrainingZone(lobby: Model, origin: CFrame, ballSettings: Ba
 	training:SetAttribute("ZoneType", "Training")
 	training.Parent = lobby
 
-	local zoneOrigin = origin * CFrame.new(36, 0, -3)
+	local zoneOrigin = origin * CFrame.new(-47, 0, 2)
 	createPart(
 		training,
 		"TrainingCourt",
@@ -629,6 +1128,150 @@ local function createTrainingZone(lobby: Model, origin: CFrame, ballSettings: Ba
 	)
 end
 
+local function createFacilityKiosk(
+	parent: Instance,
+	name: string,
+	title: string,
+	origin: CFrame,
+	accent: Color3
+): Model
+	local facility = Instance.new("Model")
+	facility.Name = name
+	facility:SetAttribute("FacilityType", name)
+	facility.Parent = parent
+
+	createPart(
+		facility,
+		"Floor",
+		Vector3.new(22, 0.5, 16),
+		origin * CFrame.new(0, 0.25, 0),
+		COLORS.Concrete,
+		Enum.Material.Concrete
+	)
+	createPart(
+		facility,
+		"BackWall",
+		Vector3.new(22, 8, 0.7),
+		origin * CFrame.new(0, 4, -7.65),
+		COLORS.DarkGlass,
+		Enum.Material.Glass
+	).Transparency =
+		0.3
+	for _, xDirection in { -1, 1 } do
+		createPart(
+			facility,
+			if xDirection < 0 then "LeftColumn" else "RightColumn",
+			Vector3.new(0.8, 8.6, 0.8),
+			origin * CFrame.new(xDirection * 10.5, 4.3, -7.2),
+			accent,
+			Enum.Material.Neon
+		)
+	end
+	createPart(
+		facility,
+		"Roof",
+		Vector3.new(22.8, 0.65, 16.8),
+		origin * CFrame.new(0, 8.25, 0),
+		COLORS.Asphalt,
+		Enum.Material.Metal
+	)
+	createPart(
+		facility,
+		"Counter",
+		Vector3.new(16, 2.5, 2.2),
+		origin * CFrame.new(0, 1.25, -4.8),
+		accent,
+		Enum.Material.Metal
+	)
+	createBillboardSign(
+		facility,
+		name .. "Sign",
+		title,
+		origin * CFrame.new(0, 10.5, -6.8),
+		accent,
+		17
+	)
+	return facility
+end
+
+local function createTrophyCorner(parent: Instance, origin: CFrame)
+	local trophy = Instance.new("Model")
+	trophy.Name = "TrophyCorner"
+	trophy:SetAttribute("FacilityType", "Trophy")
+	trophy.Parent = parent
+
+	createPart(
+		trophy,
+		"Podium",
+		Vector3.new(12, 1.4, 8),
+		origin * CFrame.new(0, 0.7, 0),
+		COLORS.Concrete,
+		Enum.Material.Marble
+	)
+	for index, height in { 5.8, 4.4, 3.8 } do
+		local x = (index - 2) * 3.4
+		createPart(
+			trophy,
+			string.format("TrophyStem_%d", index),
+			Vector3.new(0.65, height, 0.65),
+			origin * CFrame.new(x, 1.4 + height * 0.5, 0),
+			COLORS.Yellow,
+			Enum.Material.Metal
+		)
+		local ball = createPart(
+			trophy,
+			string.format("TrophyBall_%d", index),
+			Vector3.new(1.8, 1.8, 1.8),
+			origin * CFrame.new(x, 1.4 + height + 0.8, 0),
+			if index == 1 then COLORS.Cyan elseif index == 2 then COLORS.Yellow else COLORS.Pink,
+			Enum.Material.Neon
+		)
+		ball.Shape = Enum.PartType.Ball
+		ball.CanCollide = false
+	end
+	createBillboardSign(
+		trophy,
+		"TrophySign",
+		"DISTRICT HONOURS",
+		origin * CFrame.new(0, 10.5, 0),
+		COLORS.Yellow,
+		15
+	)
+end
+
+local function createRestZone(parent: Instance, origin: CFrame)
+	local rest = Instance.new("Model")
+	rest.Name = "RestZone"
+	rest:SetAttribute("FacilityType", "Rest")
+	rest.Parent = parent
+	createPart(
+		rest,
+		"RestDeck",
+		Vector3.new(28, 0.4, 13),
+		origin * CFrame.new(0, 0.2, 0),
+		COLORS.Concrete,
+		Enum.Material.Concrete
+	)
+	for _, x in { -8.5, 0, 8.5 } do
+		createPart(
+			rest,
+			string.format("Bench_%d", math.floor(x * 10)),
+			Vector3.new(6.8, 0.5, 2.1),
+			origin * CFrame.new(x, 1.25, 0),
+			COLORS.Orange,
+			Enum.Material.WoodPlanks
+		)
+	end
+	createBillboardSign(
+		rest,
+		"RestSign",
+		"RECOVER  /  WATCH  /  REQUEUE",
+		origin * CFrame.new(0, 5.5, -5),
+		COLORS.Green,
+		22
+	)
+end
+
 local function createStreetDecor(lobby: Model, origin: CFrame)
 	local decor = Instance.new("Model")
 	decor.Name = "StreetDecor"
@@ -637,8 +1280,8 @@ local function createStreetDecor(lobby: Model, origin: CFrame)
 	local muralWall = createPart(
 		decor,
 		"MuralWall",
-		Vector3.new(29, 10, 1),
-		origin * CFrame.new(-38, 5, -22),
+		Vector3.new(38, 11, 1),
+		origin * CFrame.new(-17, 5.5, -33),
 		Color3.fromRGB(34, 35, 48),
 		Enum.Material.Concrete
 	)
@@ -649,9 +1292,9 @@ local function createStreetDecor(lobby: Model, origin: CFrame)
 		local stripe = createPart(
 			decor,
 			string.format("MuralStripe_%d", index),
-			Vector3.new(4.6, 0.55, 0.18),
+			Vector3.new(6.4, 0.65, 0.18),
 			origin
-				* CFrame.new(-48 + index * 4, 3 + (index % 3) * 1.45, -22.6)
+				* CFrame.new(-34 + index * 7, 3 + (index % 3) * 1.65, -33.6)
 				* CFrame.Angles(0, 0, math.rad(if index % 2 == 0 then 18 else -18)),
 			color,
 			Enum.Material.Neon
@@ -659,30 +1302,30 @@ local function createStreetDecor(lobby: Model, origin: CFrame)
 		stripe.CanCollide = false
 	end
 
-	for index, x in { -49, -39, -29 } do
-		local benchSeat = createPart(
-			decor,
-			string.format("Bench_%d_Seat", index),
-			Vector3.new(7, 0.45, 2.1),
-			origin * CFrame.new(x, 1.35, -13),
-			COLORS.Orange,
-			Enum.Material.WoodPlanks
-		)
-		benchSeat:SetAttribute("Decorative", true)
-		for _, legX in { -2.5, 2.5 } do
-			createPart(
-				decor,
-				string.format("Bench_%d_Leg_%s", index, if legX < 0 then "Left" else "Right"),
-				Vector3.new(0.4, 1.2, 1.3),
-				origin * CFrame.new(x + legX, 0.6, -13),
-				COLORS.Concrete,
-				Enum.Material.Metal
-			)
-		end
-	end
+	createLamp(decor, "LobbyLampLeft", origin * CFrame.new(-67, 0, 26), COLORS.Cyan, 15)
+	createLamp(decor, "LobbyLampRight", origin * CFrame.new(67, 0, 26), COLORS.Pink, 15)
+end
 
-	createLamp(decor, "LobbyLampLeft", origin * CFrame.new(-52, 0, 16), COLORS.Cyan, 15)
-	createLamp(decor, "LobbyLampRight", origin * CFrame.new(52, 0, 16), COLORS.Pink, 15)
+local function createLobbyFacilities(lobby: Model, origin: CFrame)
+	local facilities = Instance.new("Model")
+	facilities.Name = "Facilities"
+	facilities.Parent = lobby
+	createFacilityKiosk(
+		facilities,
+		"StreetShop",
+		"PANNA SUPPLY  /  COSMETICS",
+		origin * CFrame.new(49, 0, -16),
+		COLORS.Pink
+	)
+	createFacilityKiosk(
+		facilities,
+		"LockerRoom",
+		"LOCKER  /  LOADOUT",
+		origin * CFrame.new(49, 0, 12),
+		COLORS.Cyan
+	)
+	createTrophyCorner(facilities, origin * CFrame.new(14, 0, -22))
+	createRestZone(facilities, origin * CFrame.new(0, 0, 27))
 end
 
 local function createLobby(root: Model, world: WorldSettings, ballSettings: BallSettings): Model
@@ -694,7 +1337,7 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 	local floor = createPart(
 		lobby,
 		"Plaza",
-		Vector3.new(112, 1, 58),
+		Vector3.new(150, 1, 74),
 		origin * CFrame.new(0, -0.5, 0),
 		COLORS.Asphalt,
 		Enum.Material.Asphalt
@@ -705,8 +1348,8 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 		createPart(
 			lobby,
 			if xDirection < 0 then "PlazaRailLeft" else "PlazaRailRight",
-			Vector3.new(0.45, 0.35, 58),
-			origin * CFrame.new(xDirection * 55.7, 0.18, 0),
+			Vector3.new(0.45, 0.35, 74),
+			origin * CFrame.new(xDirection * 74.7, 0.18, 0),
 			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
 			Enum.Material.Neon
 		)
@@ -726,7 +1369,7 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 	spawn.Duration = 0
 	spawn.Parent = lobby
 
-	local queueOrigin = origin * CFrame.new(0, 0, 12)
+	local queueOrigin = origin * CFrame.new(0, 0, 7)
 	local queuePad = createPart(
 		lobby,
 		"QueuePad",
@@ -738,17 +1381,9 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 	queuePad.Transparency = 0.1
 	queuePad:SetAttribute("QueueMode", "1v1")
 
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = "QueuePrompt"
-	prompt.ActionText = "JOIN 1v1 QUEUE"
-	prompt.ObjectText = "PANNA MATCHMAKING"
-	prompt.KeyboardKeyCode = Enum.KeyCode.T
-	prompt.GamepadKeyCode = Enum.KeyCode.ButtonR3
-	prompt.HoldDuration = 0.15
-	prompt.MaxActivationDistance = 12
-	prompt.RequiresLineOfSight = false
+	local prompt =
+		createPrompt(queuePad, "QueuePrompt", "JOIN 1v1 QUEUE", "DISTRICT MATCHMAKING", nil, nil)
 	prompt:SetAttribute("QueueMode", "1v1")
-	prompt.Parent = queuePad
 
 	for _, xDirection in { -1, 1 } do
 		createPart(
@@ -781,22 +1416,269 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 		lobby,
 		"DistrictSign",
 		"PANNA DISTRICT",
-		origin * CFrame.new(0, 12, -22),
+		origin * CFrame.new(0, 12, -32),
 		COLORS.Cyan,
 		27
 	)
 	createBillboardSign(
 		lobby,
 		"ArenaDirectionSign",
-		"MATCH COURTS  >>>",
-		origin * CFrame.new(0, 5, 25),
+		"6 ROOMS  /  WALK THE STREET  >>>",
+		origin * CFrame.new(0, 5, 34),
 		COLORS.Pink,
 		16
 	)
 
 	createTrainingZone(lobby, origin, ballSettings)
+	createLobbyFacilities(lobby, origin)
 	createStreetDecor(lobby, origin)
 	return lobby
+end
+
+local function getDistrictExtents(world: WorldSettings): (number, number)
+	local startZ = world.LobbyOrigin.Z - 38
+	local furthestArenaZ = world.LobbyOrigin.Z
+	for _, arenaCFrame in world.ArenaPositions do
+		furthestArenaZ = math.max(furthestArenaZ, arenaCFrame.Position.Z)
+	end
+	local endZ = furthestArenaZ + world.ArenaLength * 0.5 + 58
+	return startZ, endZ
+end
+
+local function createEndLandmark(parent: Instance, origin: CFrame)
+	local landmark = Instance.new("Model")
+	landmark.Name = "EndLandmark"
+	landmark:SetAttribute("LandmarkType", "DistrictFinish")
+	landmark.Parent = parent
+
+	for _, xDirection in { -1, 1 } do
+		createPart(
+			landmark,
+			if xDirection < 0 then "WestTower" else "EastTower",
+			Vector3.new(3, 20, 3),
+			origin * CFrame.new(xDirection * 14, 10, 0),
+			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
+			Enum.Material.Neon
+		)
+		createPart(
+			landmark,
+			if xDirection < 0 then "WestFoot" else "EastFoot",
+			Vector3.new(7, 1.2, 7),
+			origin * CFrame.new(xDirection * 14, 0.6, 0),
+			COLORS.Concrete,
+			Enum.Material.Concrete
+		)
+	end
+	createPart(
+		landmark,
+		"CrownBeam",
+		Vector3.new(31, 2, 3),
+		origin * CFrame.new(0, 20, 0),
+		COLORS.Yellow,
+		Enum.Material.Neon
+	)
+	local crownBall = createPart(
+		landmark,
+		"CrownBall",
+		Vector3.new(6, 6, 6),
+		origin * CFrame.new(0, 25, 0),
+		COLORS.White,
+		Enum.Material.Neon
+	)
+	crownBall.Shape = Enum.PartType.Ball
+	crownBall.CanCollide = false
+	createBillboardSign(
+		landmark,
+		"LandmarkSign",
+		"END OF THE STREET  /  CHAMPIONS RISE",
+		origin * CFrame.new(0, 15.5, 0),
+		COLORS.Yellow,
+		31
+	)
+end
+
+local function createPannaDistrict(root: Model, world: WorldSettings): Model
+	local district = Instance.new("Model")
+	district.Name = "DistrictEnvironment"
+	district:SetAttribute("DistrictStyle", "EveningStreetFootball")
+	district:SetAttribute("ExternalAssetCount", 0)
+	district.Parent = root
+
+	local startZ, endZ = getDistrictExtents(world)
+	local streetLength = endZ - startZ
+	local centerZ = (startZ + endZ) * 0.5
+
+	local ground = createPart(
+		district,
+		"DistrictGround",
+		Vector3.new(214, 1.2, streetLength + 18),
+		CFrame.new(0, -1.1, centerZ),
+		COLORS.Black,
+		Enum.Material.Concrete
+	)
+	district.PrimaryPart = ground
+
+	local street = Instance.new("Model")
+	street.Name = "CentralStreet"
+	street:SetAttribute("Continuous", true)
+	street:SetAttribute("StartZ", startZ)
+	street:SetAttribute("EndZ", endZ)
+	street.Parent = district
+	createPart(
+		street,
+		"StreetSurface",
+		Vector3.new(30, 0.55, streetLength),
+		CFrame.new(0, -0.28, centerZ),
+		COLORS.Asphalt,
+		Enum.Material.Asphalt
+	)
+	for _, xDirection in { -1, 1 } do
+		createPart(
+			street,
+			if xDirection < 0 then "WestWalk" else "EastWalk",
+			Vector3.new(12, 0.7, streetLength),
+			CFrame.new(xDirection * 21, -0.15, centerZ),
+			COLORS.Concrete,
+			Enum.Material.Concrete
+		)
+		createPart(
+			street,
+			if xDirection < 0 then "WestCurbNeon" else "EastCurbNeon",
+			Vector3.new(0.3, 0.16, streetLength),
+			CFrame.new(xDirection * 15.1, 0.09, centerZ),
+			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
+			Enum.Material.Neon
+		)
+	end
+
+	local laneMarkers = Instance.new("Model")
+	laneMarkers.Name = "LaneMarkers"
+	laneMarkers.Parent = street
+	local markerCount = math.max(1, math.floor(streetLength / 20))
+	for index = 0, markerCount do
+		local z = startZ + (streetLength * index / markerCount)
+		local marker = createPart(
+			laneMarkers,
+			string.format("Marker_%02d", index),
+			Vector3.new(0.24, 0.08, 8),
+			CFrame.new(0, 0.08, z),
+			COLORS.Yellow,
+			Enum.Material.Neon
+		)
+		marker.CanCollide = false
+		marker.CanTouch = false
+		marker.CanQuery = false
+	end
+
+	local crosswalks = Instance.new("Model")
+	crosswalks.Name = "RoomCrosswalks"
+	crosswalks.Parent = street
+	for index = 1, ARENA_COUNT, 2 do
+		local rowZ = world.ArenaPositions[index].Position.Z
+		for stripeIndex = 1, 6 do
+			local stripe = createPart(
+				crosswalks,
+				string.format("Row_%02d_Stripe_%d", math.ceil(index * 0.5), stripeIndex),
+				Vector3.new(24, 0.07, 0.8),
+				CFrame.new(0, 0.09, rowZ - 3.5 + stripeIndex),
+				COLORS.White,
+				Enum.Material.SmoothPlastic
+			)
+			stripe.CanCollide = false
+			stripe.CanTouch = false
+			stripe.CanQuery = false
+		end
+	end
+
+	local lighting = Instance.new("Model")
+	lighting.Name = "DistrictLighting"
+	lighting.Parent = district
+	local lampCount = math.max(2, math.floor(streetLength / 55))
+	for index = 0, lampCount do
+		local alpha = index / lampCount
+		local z = startZ + streetLength * alpha
+		local xDirection = if index % 2 == 0 then -1 else 1
+		createLamp(
+			lighting,
+			string.format("StreetLamp_%02d", index),
+			CFrame.new(xDirection * 21, 0, z),
+			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
+			14
+		)
+	end
+
+	local skyline = Instance.new("Model")
+	skyline.Name = "DistrictSkyline"
+	skyline.Parent = district
+	local blockCount = math.max(3, math.floor(streetLength / 68))
+	for index = 0, blockCount - 1 do
+		local blockLength = streetLength / blockCount - 5
+		local z = startZ + blockLength * 0.5 + index * (streetLength / blockCount)
+		for _, xDirection in { -1, 1 } do
+			local height = 17 + ((index * 7 + (if xDirection < 0 then 3 else 0)) % 14)
+			createPart(
+				skyline,
+				string.format("Block_%02d_%s", index, if xDirection < 0 then "West" else "East"),
+				Vector3.new(28, height, blockLength),
+				CFrame.new(xDirection * 99, height * 0.5 - 0.4, z),
+				if index % 2 == 0 then Color3.fromRGB(27, 30, 40) else COLORS.Concrete,
+				Enum.Material.Concrete
+			)
+			local roofCap = createPart(
+				skyline,
+				string.format("RoofCap_%02d_%s", index, if xDirection < 0 then "West" else "East"),
+				Vector3.new(28.4, 0.35, blockLength + 0.4),
+				CFrame.new(xDirection * 99, height - 0.2, z),
+				Color3.fromRGB(19, 23, 32),
+				Enum.Material.Metal
+			)
+			roofCap.CanCollide = false
+			local roofAccent = if xDirection < 0 then COLORS.Cyan else COLORS.Pink
+			for _, zEdge in { -1, 1 } do
+				local rail = createPart(
+					skyline,
+					string.format(
+						"RoofRailZ_%02d_%s_%s",
+						index,
+						if xDirection < 0 then "West" else "East",
+						if zEdge < 0 then "South" else "North"
+					),
+					Vector3.new(28.7, 0.24, 0.24),
+					CFrame.new(
+						xDirection * 99,
+						height + 0.02,
+						z + zEdge * (blockLength * 0.5 + 0.12)
+					),
+					roofAccent,
+					Enum.Material.Neon
+				)
+				rail.CanCollide = false
+				rail.CanTouch = false
+				rail.CanQuery = false
+			end
+			for _, xEdge in { -1, 1 } do
+				local rail = createPart(
+					skyline,
+					string.format(
+						"RoofRailX_%02d_%s_%s",
+						index,
+						if xDirection < 0 then "West" else "East",
+						if xEdge < 0 then "Inner" else "Outer"
+					),
+					Vector3.new(0.24, 0.24, blockLength + 0.4),
+					CFrame.new(xDirection * 99 + xEdge * 14.22, height + 0.02, z),
+					roofAccent,
+					Enum.Material.Neon
+				)
+				rail.CanCollide = false
+				rail.CanTouch = false
+				rail.CanQuery = false
+			end
+		end
+	end
+
+	createEndLandmark(district, CFrame.new(0, 0, endZ - 10))
+	return district
 end
 
 local function configureLighting()
@@ -855,7 +1737,7 @@ local function configureLighting()
 		bloom:SetAttribute(LIGHTING_EFFECT_ATTRIBUTE, true)
 		bloom.Parent = Lighting
 	end
-	bloom.Intensity = 0.55
+	bloom.Intensity = 0.34
 	bloom.Size = 28
 	bloom.Threshold = 1.15
 end
@@ -866,7 +1748,7 @@ local function validateConfig(config: Config)
 	assert(world.RootName ~= "", "Config.World.RootName must not be empty")
 	assert(
 		#world.ArenaPositions >= ARENA_COUNT,
-		"Config.World.ArenaPositions must contain two arenas"
+		string.format("Config.World.ArenaPositions must contain at least %d arenas", ARENA_COUNT)
 	)
 	assert(world.ArenaWidth > 20, "Config.World.ArenaWidth must be greater than 20")
 	assert(world.ArenaLength > 30, "Config.World.ArenaLength must be greater than 30")
@@ -889,15 +1771,68 @@ local function validateConfig(config: Config)
 	)
 end
 
+local function configureBallPhysics(root: Model, ballSettings: BallSettings)
+	local physicalProperties = PhysicalProperties.new(
+		ballSettings.Density,
+		ballSettings.Friction,
+		ballSettings.Elasticity,
+		1,
+		1
+	)
+	for _, descendant in root:GetDescendants() do
+		if
+			descendant:IsA("BasePart")
+			and (descendant.Name == "Ball" or descendant:GetAttribute("TrainingBall") == true)
+		then
+			descendant.CustomPhysicalProperties = physicalProperties
+		end
+	end
+end
+
+local function isCompatibleBakedDistrict(candidate: Instance, config: Config): boolean
+	if not candidate:IsA("Model") then
+		return false
+	end
+	if
+		candidate:GetAttribute("LayoutVersion") ~= config.Version
+		or candidate:GetAttribute("ArenaCount") ~= ARENA_COUNT
+		or not candidate:FindFirstChild("DistrictEnvironment")
+		or not candidate:FindFirstChild("Lobby")
+	then
+		return false
+	end
+	local arenas = candidate:FindFirstChild("Arenas")
+	if not arenas or not arenas:IsA("Folder") then
+		return false
+	end
+	local arenaCount = 0
+	for _, child in arenas:GetChildren() do
+		if child:IsA("Model") then
+			arenaCount += 1
+		end
+	end
+	return arenaCount == ARENA_COUNT
+end
+
 function WorldBuilder.Build(config: Config): Model
 	validateConfig(config)
+	local existingRoot = Workspace:FindFirstChild(config.World.RootName)
+	if existingRoot and isCompatibleBakedDistrict(existingRoot, config) then
+		configureBallPhysics(existingRoot, config.Ball)
+		configureLighting()
+		return existingRoot
+	end
 
 	-- Build off-tree first, so a construction error leaves the current playable world intact.
 	local root = Instance.new("Model")
 	root.Name = config.World.RootName
+	root:SetAttribute("DistrictName", "PannaDistrict")
 	root:SetAttribute("GeneratedBy", "WorldBuilder")
 	root:SetAttribute("ArenaCount", ARENA_COUNT)
+	root:SetAttribute("LayoutVersion", config.Version)
+	root:SetAttribute("RoomStateContract", table.concat(ROOM_STATES, ","))
 
+	createPannaDistrict(root, config.World)
 	createLobby(root, config.World, config.Ball)
 
 	local arenasFolder = Instance.new("Folder")
@@ -913,7 +1848,7 @@ function WorldBuilder.Build(config: Config): Model
 		)
 	end
 
-	local existingRoot = Workspace:FindFirstChild(config.World.RootName)
+	configureBallPhysics(root, config.Ball)
 	if existingRoot then
 		existingRoot:Destroy()
 	end

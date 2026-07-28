@@ -1,0 +1,6 @@
+{
+  "name": "PannaDistrict",
+  "tree": {
+    "$path": "src/world/PannaDistrict.model.json"
+  }
+}

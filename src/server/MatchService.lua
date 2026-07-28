@@ -39,8 +39,8 @@ export type Service = typeof(setmetatable(
 		remotes: any,
 		matches: { [string]: MatchRecord },
 		byPlayer: { [Player]: MatchRecord },
-		onArenaReleased: (() -> ())?,
-		onRematchReady: ((Player, Player) -> ())?,
+		onArenaReleased: ((any, Player, Player) -> ())?,
+		onRematchReady: ((Player, Player, any) -> ())?,
 		goalHeartbeat: RBXScriptConnection?,
 		goalDistances: { [string]: { Home: number?, Away: number? } },
 	},
@@ -169,11 +169,11 @@ function MatchService._stepGoals(self: Service)
 	end
 end
 
-function MatchService.SetArenaReleasedCallback(self: Service, callback: () -> ())
+function MatchService.SetArenaReleasedCallback(self: Service, callback: (any, Player, Player) -> ())
 	self.onArenaReleased = callback
 end
 
-function MatchService.SetRematchCallback(self: Service, callback: (Player, Player) -> ())
+function MatchService.SetRematchCallback(self: Service, callback: (Player, Player, any) -> ())
 	self.onRematchReady = callback
 end
 
@@ -196,10 +196,12 @@ function MatchService._teleportPlayers(self: Service, match: MatchRecord): boole
 	return homeReady and awayReady
 end
 
-function MatchService._snapshot(_self: Service, match: MatchRecord): { [string]: any }
+function MatchService._snapshot(self: Service, match: MatchRecord): { [string]: any }
 	return {
 		id = match.Id,
 		state = match.State,
+		arenaId = match.Arena.Id,
+		arenaName = self.arenas:GetDisplayName(match.Arena),
 		homeName = match.Home.DisplayName,
 		awayName = match.Away.DisplayName,
 		homeUserId = match.Home.UserId,
@@ -221,6 +223,7 @@ function MatchService.GetSnapshot(self: Service, player: Player): { [string]: an
 end
 
 function MatchService._broadcast(self: Service, match: MatchRecord)
+	self.arenas:UpdateScore(match.Arena, match.Score.Home, match.Score.Away)
 	local snapshot = self:_snapshot(match)
 	for _, player in { match.Home, match.Away } do
 		if player.Parent then
@@ -253,7 +256,7 @@ function MatchService.StartMatch(
 	end
 
 	local matchId = HttpService:GenerateGUID(false)
-	if not self.arenas:Reserve(arena, matchId) then
+	if not self.arenas:Reserve(arena, matchId, home, away) then
 		return nil
 	end
 
@@ -286,9 +289,11 @@ function MatchService.StartMatch(
 	self.byPlayer[away] = match
 	for _, player in { home, away } do
 		player:SetAttribute("InQueue", false)
+		player:SetAttribute("InRoomWaiting", false)
 		player:SetAttribute("InMatch", true)
 		player:SetAttribute("MatchId", matchId)
 		player:SetAttribute("ArenaId", arena.Id)
+		player:SetAttribute("SelectedArenaId", arena.Id)
 	end
 
 	self:_setControlsLocked(match, true)
@@ -328,6 +333,7 @@ function MatchService._runMatch(self: Service, match: MatchRecord)
 	match.StartedAt = serverNow()
 	match.EndsAt = match.StartedAt + self.config.Match.DurationSeconds
 	self:_setControlsLocked(match, false)
+	self.arenas:SetMatchState(match.Arena, match.Id, "Active", match.Home, match.Away)
 	self.ballService:SetActive(match, true)
 	self:_broadcast(match)
 
@@ -477,6 +483,7 @@ function MatchService._finish(
 	match.Ended = true
 	match.State = "Finished"
 	match.EndsAt = serverNow()
+	self.arenas:SetMatchState(match.Arena, match.Id, "Result", match.Home, match.Away)
 	self:_setControlsLocked(match, true)
 	self.ballService:SetActive(match, false)
 	if awardRewards ~= false then
@@ -516,22 +523,43 @@ function MatchService._cleanup(self: Service, match: MatchRecord)
 		self.byPlayer[player] = nil
 		if player.Parent then
 			player:SetAttribute("InMatch", false)
+			player:SetAttribute("InRoomWaiting", false)
 			player:SetAttribute("MatchId", "")
 			player:SetAttribute("ArenaId", "")
+			player:SetAttribute("SelectedArenaId", "")
 			player:SetAttribute("ControlsLocked", false)
-			self.arenas:ReturnToLobby(player)
+			self.arenas:ReturnToStreet(match.Arena, player)
 			self.remotes.StateUpdate:FireClient(player, { match = false })
 		end
 	end
 	self.matches[match.Id] = nil
 	self.goalDistances[match.Id] = nil
 
-	if self.onArenaReleased then
-		self.onArenaReleased()
-	end
 	if wantsRematch and self.onRematchReady and match.Home.Parent and match.Away.Parent then
-		self.onRematchReady(match.Home, match.Away)
+		self.onRematchReady(match.Home, match.Away, match.Arena)
 	end
+	if self.onArenaReleased then
+		self.onArenaReleased(match.Arena, match.Home, match.Away)
+	end
+end
+
+function MatchService.RequestExit(self: Service, player: Player): boolean
+	local match = self.byPlayer[player]
+	if not match then
+		return false
+	end
+	if match.Ended then
+		match.RematchVotes[player] = nil
+		self:_cleanup(match)
+		return true
+	end
+	local other = opponent(match, player)
+	if match.StartedAt <= 0 then
+		self:_finish(match, nil, "Cancelled", false)
+	else
+		self:_finish(match, if other and other.Parent then other else nil, "Forfeit", false)
+	end
+	return true
 end
 
 function MatchService.RequestRematch(self: Service, player: Player): boolean
@@ -600,7 +628,10 @@ function MatchService.HandleCharacterAdded(self: Service, player: Player, charac
 			then match.Arena.HomeSpawn
 			else match.Arena.AwaySpawn
 		self.arenas:TeleportToSpawn(player, spawnPart)
-		self:_setControlsLocked(match, match.State == "Countdown" or match.State == "GoalPause")
+		self:_setControlsLocked(
+			match,
+			match.Ended or match.State == "Countdown" or match.State == "GoalPause"
+		)
 	end)
 end
 
