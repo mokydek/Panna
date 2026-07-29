@@ -4,13 +4,13 @@ local RunService = game:GetService("RunService")
 
 local EMIT_BATCH_SECONDS = 0.1
 local ALLOW_FALLBACK_SESSIONS = RunService:IsStudio()
+local ROOM_CAPACITY = 2
 
 local QueueService = {}
 QueueService.__index = QueueService
 
 export type Service = typeof(setmetatable(
 	{} :: {
-		config: any,
 		arenas: any,
 		matches: any,
 		remotes: any,
@@ -22,9 +22,8 @@ export type Service = typeof(setmetatable(
 	QueueService
 ))
 
-function QueueService.new(config: any, arenas: any, matches: any, remotes: any): Service
+function QueueService.new(arenas: any, matches: any, remotes: any): Service
 	return setmetatable({
-		config = config,
 		arenas = arenas,
 		matches = matches,
 		remotes = remotes,
@@ -50,9 +49,6 @@ function QueueService.GetSnapshot(self: Service, player: Player): { [string]: an
 	local roomStatus = if arena then arena.State else if globalJoined then "Waiting" else "Free"
 	local occupantsAttribute = if arena then arena.Model:GetAttribute("Occupants") else nil
 	local occupants = if type(occupantsAttribute) == "number" then occupantsAttribute else 0
-	local capacity = if self.config.Rooms and type(self.config.Rooms.Capacity) == "number"
-		then self.config.Rooms.Capacity
-		else 2
 	local status = "Ready"
 	if roomWaiting and arena then
 		status = string.format("Waiting in %s", self.arenas:GetDisplayName(arena))
@@ -73,7 +69,7 @@ function QueueService.GetSnapshot(self: Service, player: Player): { [string]: an
 		arenaName = if arena then self.arenas:GetDisplayName(arena) else "",
 		roomStatus = roomStatus,
 		occupants = occupants,
-		capacity = capacity,
+		capacity = ROOM_CAPACITY,
 	}
 end
 
@@ -235,7 +231,7 @@ function QueueService.Process(self: Service)
 	self.processing = true
 
 	task.defer(function()
-		while #self.queue >= 2 do
+		while #self.queue >= ROOM_CAPACITY do
 			local arena = self.arenas:GetAvailable()
 			if not arena then
 				break
@@ -297,7 +293,7 @@ function QueueService.EnqueuePair(self: Service, first: Player, second: Player):
 	end
 	if second.Parent and second:GetAttribute("InMatch") ~= true and not self.membership[second] then
 		self.membership[second] = true
-		table.insert(self.queue, 2, second)
+		table.insert(self.queue, ROOM_CAPACITY, second)
 		second:SetAttribute("InQueue", true)
 	end
 	self:_emitAll()

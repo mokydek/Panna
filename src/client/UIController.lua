@@ -1103,8 +1103,43 @@ function UIController.SetQueueState(self: UIController, queue: any)
 	self.QueueStatus.Text = statusText
 end
 
+function UIController.ResetTransientState(self: UIController)
+	if self._destroyed then
+		return
+	end
+
+	self:SetPowerMeter("Kick", 0, false, self._shotMode)
+	self.PowerContainer.Visible = false
+	self.ActionBar.Visible = self:IsGameplayActive() and not self._isTouchLayout
+	self._ballStatusKey = ""
+	self:SetBallStatus("Free", 0)
+	for _, action in ACTION_ORDER do
+		self:SetActionPending(action, false)
+		self:SetActionActive(action, false)
+		self:SetActionCooldown(action, 0, 0)
+	end
+
+	self._actionFeedbackToken += 1
+	if self._actionFeedbackTween then
+		self._actionFeedbackTween:Cancel()
+		self._actionFeedbackTween = nil
+	end
+	self.ActionFeedbackLabel.Visible = false
+	self.ActionFeedbackLabel.TextTransparency = 1
+	self.ActionFeedbackLabel.BackgroundTransparency = 1
+
+	if self._flashTween then
+		self._flashTween:Cancel()
+		self._flashTween = nil
+	end
+	self.ScreenFlash.Visible = false
+	self.ScreenFlash.BackgroundTransparency = 1
+	self:_restoreCameraOffset()
+end
+
 function UIController.SetMatchState(self: UIController, match: any)
 	if typeof(match) ~= "table" then
+		self:ResetTransientState()
 		self._matchVisible = false
 		self._matchState = ""
 		self._localDeadline = nil
@@ -1165,6 +1200,9 @@ function UIController.SetMatchState(self: UIController, match: any)
 	self.BallStatus.Visible = true
 	self.QueueCard.Visible = false
 	local gameplayActive = state == "Active" or state == "Overtime"
+	if not gameplayActive then
+		self:ResetTransientState()
+	end
 	local camera = Workspace.CurrentCamera
 	local compact = camera ~= nil and camera.ViewportSize.X < 600
 	self.TopBar.Visible = not (self._isTouchLayout and gameplayActive)
@@ -1308,7 +1346,16 @@ end
 
 function UIController.IsGameplayActive(self: UIController): boolean
 	local state = string.lower(self._matchState)
-	return self._matchVisible and (state == "active" or state == "live" or state == "overtime")
+	local arenaId = LOCAL_PLAYER:GetAttribute("ArenaId")
+	local matchId = LOCAL_PLAYER:GetAttribute("MatchId")
+	return self._matchVisible
+		and (state == "active" or state == "live" or state == "overtime")
+		and LOCAL_PLAYER:GetAttribute("InMatch") == true
+		and LOCAL_PLAYER:GetAttribute("ControlsLocked") ~= true
+		and typeof(arenaId) == "string"
+		and arenaId ~= ""
+		and typeof(matchId) == "string"
+		and matchId ~= ""
 end
 
 function UIController.SetActionCooldown(
@@ -1668,6 +1715,7 @@ function UIController.ApplyEffect(self: UIController, effect: any)
 			3
 		)
 	elseif kind == "result" then
+		self:ResetTransientState()
 		local won = readBoolean(effect, false, "won", "Won")
 		local title = if typeof(explicitTitle) == "string"
 			then explicitTitle
@@ -1690,7 +1738,12 @@ function UIController.ApplyEffect(self: UIController, effect: any)
 	end
 end
 
-function UIController.ApplyState(self: UIController, payload: any, isSnapshot: boolean?)
+function UIController.ApplyState(
+	self: UIController,
+	payload: any,
+	isSnapshot: boolean?,
+	allowMatchState: boolean?
+)
 	if typeof(payload) ~= "table" then
 		return
 	end
@@ -1729,6 +1782,9 @@ function UIController.ApplyState(self: UIController, payload: any, isSnapshot: b
 		) ~= nil
 	then
 		self:SetQueueState(state)
+	end
+	if allowMatchState == false then
+		return
 	end
 
 	local match = read(state, "match", "Match")

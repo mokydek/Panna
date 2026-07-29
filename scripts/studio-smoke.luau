@@ -2,6 +2,9 @@
 
 local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
+local StarterPlayer = game:GetService("StarterPlayer")
+local Workspace = game:GetService("Workspace")
 
 local function expect(condition, message)
 	if not condition then
@@ -16,13 +19,26 @@ expect(sharedRoot ~= nil, "PannaShared was not mapped by Rojo")
 
 local config = require(sharedRoot:FindFirstChild("Config"))
 local ballMath = require(sharedRoot:FindFirstChild("BallMath"))
+local goalMath = require(sharedRoot:FindFirstChild("GoalMath"))
 local net = require(sharedRoot:FindFirstChild("Net"))
 local worldBuilder = require(serverRoot:FindFirstChild("WorldBuilder"))
 local arenaServiceModule = require(serverRoot:FindFirstChild("ArenaService"))
 local ballServiceModule = require(serverRoot:FindFirstChild("BallService"))
+local matchServiceModule = require(serverRoot:FindFirstChild("MatchService"))
 local remoteRegistry = require(serverRoot:FindFirstChild("RemoteRegistry"))
+local clientRoot = StarterPlayer.StarterPlayerScripts:FindFirstChild("PannaClient")
+expect(clientRoot ~= nil, "PannaClient was not mapped by Rojo")
+local effectScope = require(clientRoot:FindFirstChild("EffectScope"))
+for _, moduleName in { "InputController", "UIController" } do
+	local clientModule = clientRoot:FindFirstChild(moduleName)
+	expect(clientModule ~= nil, moduleName .. " was not mapped by Rojo")
+	local ok, result = pcall(require, clientModule)
+	expect(ok, moduleName .. " failed to load: " .. tostring(result))
+	expect(type(result) == "table", moduleName .. " must return a module table")
+end
 
 expect(type(ballMath) == "table", "BallMath module failed to load")
+expect(type(goalMath) == "table", "GoalMath module failed to load")
 for _, functionName in
 	{
 		"IsFiniteNumber",
@@ -32,6 +48,8 @@ for _, functionName in
 		"ChargePower",
 		"DirectionDot",
 		"ClosestPointOnRay",
+		"KinematicControlTarget",
+		"KinematicRollCFrame",
 	}
 do
 	expect(type(ballMath[functionName]) == "function", "BallMath." .. functionName .. " missing")
@@ -62,6 +80,201 @@ local closestPoint, distanceAlong =
 expect(
 	(closestPoint - Vector3.new(0, 0, -7)).Magnitude < 1e-4 and math.abs(distanceAlong - 7) < 1e-4,
 	"BallMath.ClosestPointOnRay returned incorrect geometry"
+)
+
+local controlTarget = ballMath.KinematicControlTarget(
+	CFrame.new(10, 5, 20),
+	Vector3.new(10, 0, 17),
+	Vector3.new(0, 0, -1),
+	3,
+	1,
+	1.25,
+	0.09
+)
+expect(controlTarget ~= nil, "kinematic control target rejected valid input")
+local resolvedControlTarget = controlTarget :: Vector3
+expect(
+	(resolvedControlTarget - Vector3.new(11, 1.34, 17)).Magnitude < 1e-4,
+	"kinematic control target does not stay in front of the player"
+)
+expect(
+	ballMath.KinematicControlTarget(
+		CFrame.new(10, 5, 20),
+		Vector3.new(math.huge, 0, 17),
+		Vector3.new(0, 0, -1),
+		3,
+		0,
+		1.25,
+		0.09
+	) == nil,
+	"kinematic control accepted a non-finite ground point"
+)
+local rolled =
+	ballMath.KinematicRollCFrame(CFrame.new(0, 1, 0), Vector3.new(0, 1, -2), 1, 1, math.pi)
+expect(
+	(rolled.Position - Vector3.new(0, 1, -2)).Magnitude < 1e-4,
+	"kinematic roll lost target position"
+)
+expect(rolled.Rotation ~= CFrame.identity, "kinematic roll did not rotate across travel")
+expect(config.Ball.Dribble.Distance > config.Ball.Radius, "controlled ball distance is invalid")
+expect(config.Ball.Dribble.FollowResponsiveness > 0, "kinematic follow is disabled")
+expect(
+	config.Ball.Dribble.MaximumFollowDistance >= config.Ball.Dribble.Distance,
+	"follow snap bound is too small"
+)
+expect(config.Ball.Dribble.RotationMultiplier > 0, "controlled ball rotation is disabled")
+expect(config.Ball.ControlRadius == nil, "unused legacy Ball.ControlRadius still exists")
+expect(config.Actions.TackleRadius == nil, "unused legacy Actions.TackleRadius still exists")
+expect(config.Match.MinimumPlayers == nil, "fixed 1v1 Match.MinimumPlayers must not be misleading")
+expect(config.Rooms.Capacity == nil, "fixed 1v1 Rooms.Capacity must not be misleading")
+expect(config.Actions.ShieldMaxSeconds == nil, "duplicate shield duration still exists")
+expect(config.Ball.Pass.StateSeconds > 0, "pass state duration is missing")
+expect(config.Ball.Shot.MinimumFlightSeconds == nil, "flight timing is still coupled to Shot")
+expect(config.Ball.Limits.MinimumFlightSeconds > 0, "neutral minimum flight duration is missing")
+expect(config.Actions.Tackle.AngularImpulseScale > 0, "tackle spin tuning is missing")
+expect(config.Actions.Panna.AngularImpulseScale > 0, "panna spin tuning is missing")
+expect(config.Actions.Panna.ShooterRecaptureSeconds > 0, "panna recapture tuning is missing")
+expect(
+	config.Ball.Capture.OwnerBreakRadius
+		< math.sqrt(config.Ball.Capture.FrontDistance ^ 2 + config.Ball.Capture.LateralDistance ^ 2),
+	"owner break radius can never become the active capture limit"
+)
+
+local defenderToAttacker = Vector3.new(0, 0, -1)
+expect(
+	ballMath.DirectionDot(defenderToAttacker, defenderToAttacker)
+		>= config.Actions.Shield.TackleFrontDot,
+	"shield facing the tackler did not block"
+)
+expect(
+	ballMath.DirectionDot(defenderToAttacker, -defenderToAttacker)
+		< config.Actions.Shield.TackleFrontDot,
+	"shield facing away from the tackler blocked"
+)
+
+expect(type(effectScope) == "table", "EffectScope module failed to load")
+expect(
+	effectScope.Matches({ kind = "Message" }, "", "", 0, "", "", 0),
+	"global effect was incorrectly scoped"
+)
+expect(
+	effectScope.Matches(
+		{ kind = "Result", matchId = "MatchB", arenaId = "Arena_2", matchRevision = 2 },
+		"MatchB",
+		"Arena_2",
+		2,
+		"MatchB",
+		"Arena_2",
+		2
+	),
+	"converged current result was rejected"
+)
+expect(
+	not effectScope.Matches(
+		{ kind = "Result", matchId = "MatchA", arenaId = "Arena_1", matchRevision = 1 },
+		"MatchA",
+		"Arena_1",
+		1,
+		"MatchB",
+		"Arena_2",
+		2
+	),
+	"stale result was accepted after a newer StateUpdate"
+)
+expect(
+	effectScope.Matches(
+		{ kind = "Message", matchId = "MatchB", arenaId = "Arena_2", matchRevision = 2 },
+		"MatchA",
+		"Arena_1",
+		1,
+		"MatchB",
+		"Arena_2",
+		2
+	),
+	"new effect was rejected while Player attributes were catching up"
+)
+expect(
+	effectScope.Matches(
+		{ kind = "Message", matchId = "MatchB", arenaId = "Arena_2", matchRevision = 2 },
+		"MatchB",
+		"Arena_2",
+		2,
+		"MatchA",
+		"Arena_1",
+		1
+	),
+	"new effect was rejected while StateUpdate was catching up"
+)
+expect(
+	effectScope.Matches(
+		{ kind = "Message", matchId = "MatchB", arenaId = "Arena_2", matchRevision = 2 },
+		"MatchA",
+		"Arena_1",
+		1,
+		"MatchA",
+		"Arena_1",
+		1
+	),
+	"newer effect could not establish the next match context"
+)
+expect(
+	not effectScope.Matches(
+		{ kind = "Result", matchId = "MatchA", arenaId = "Arena_1", matchRevision = 1 },
+		"MatchB",
+		"Arena_2",
+		2,
+		"MatchA",
+		"Arena_1",
+		1
+	),
+	"stale result was accepted after newer Player attributes"
+)
+expect(
+	effectScope.Matches(
+		{ kind = "Result", matchId = "MatchOld", arenaId = "Arena_1", matchRevision = 1 },
+		"",
+		"",
+		1,
+		"MatchOld",
+		"Arena_1",
+		1
+	),
+	"recent result was rejected after cleanup"
+)
+expect(
+	not effectScope.Matches(
+		{ kind = "Result", matchId = "MatchB", arenaId = "Arena_2" },
+		"MatchB",
+		"Arena_2",
+		2,
+		"MatchB",
+		"Arena_2",
+		2
+	),
+	"scoped effect without a server revision was accepted"
+)
+expect(
+	not effectScope.Matches(
+		{ kind = "Message", matchId = "MatchB", arenaId = "Arena_3", matchRevision = 2 },
+		"MatchB",
+		"Arena_2",
+		2,
+		"MatchB",
+		"Arena_2",
+		2
+	),
+	"same-revision effect from the wrong arena was accepted"
+)
+local stateMatchId, stateArenaId, stateRevision = effectScope.ReadStateContext({
+	match = { id = "MatchNew", arenaId = "Arena_2", revision = 3 },
+})
+expect(
+	stateMatchId == "MatchNew" and stateArenaId == "Arena_2" and stateRevision == 3,
+	"state context was not read"
+)
+expect(
+	effectScope.ReadStateRevision({ match = false, matchRevision = 3 }) == 3,
+	"cleared snapshot lost its match revision"
 )
 
 local function tunedVelocity(tuning: any, exponent: number, power: number): Vector3
@@ -154,6 +367,78 @@ expect(
 	"defender-facing tackle geometry is inconsistent"
 )
 
+for _, functionName in
+	{
+		"CreateGeometry",
+		"SignedDistance",
+		"FullCrossingCenter",
+		"IsSphereInsideAperture",
+		"DidSphereFullyCross",
+	}
+do
+	expect(type(goalMath[functionName]) == "function", "GoalMath." .. functionName .. " missing")
+end
+
+local goalGeometry =
+	goalMath.CreateGeometry(CFrame.new(0, 4, 10), Vector3.new(16, 8, 4), Vector3.zero)
+expect(goalGeometry ~= nil, "GoalMath rejected valid goal geometry")
+local resolvedGoalGeometry = goalGeometry :: any
+local ballRadius = 1
+expect(
+	not goalMath.DidSphereFullyCross(
+		Vector3.new(0, 1, 6),
+		Vector3.new(0, 1, 8),
+		ballRadius,
+		resolvedGoalGeometry
+	),
+	"ball touching the goal line counted as a goal"
+)
+expect(
+	not goalMath.DidSphereFullyCross(
+		Vector3.new(0, 1, 6),
+		Vector3.new(0, 1, 8.5),
+		ballRadius,
+		resolvedGoalGeometry
+	),
+	"half-crossed ball counted as a goal"
+)
+expect(
+	goalMath.DidSphereFullyCross(
+		Vector3.new(0, 1, 6),
+		Vector3.new(0, 1, 9.2),
+		ballRadius,
+		resolvedGoalGeometry
+	),
+	"fully crossed ball did not count"
+)
+expect(
+	goalMath.DidSphereFullyCross(
+		Vector3.new(0, 1, 5),
+		Vector3.new(0, 1, 14),
+		ballRadius,
+		resolvedGoalGeometry
+	),
+	"fast swept crossing did not count"
+)
+expect(
+	not goalMath.DidSphereFullyCross(
+		Vector3.new(7, 1, 6),
+		Vector3.new(7, 1, 10),
+		ballRadius,
+		resolvedGoalGeometry
+	),
+	"post tangency counted as a goal"
+)
+expect(
+	not goalMath.DidSphereFullyCross(
+		Vector3.new(0, 1, 10),
+		Vector3.new(0, 1, 7),
+		ballRadius,
+		resolvedGoalGeometry
+	),
+	"reverse entry from behind the goal counted"
+)
+
 for _, moduleName in
 	{
 		"RateLimiter",
@@ -180,12 +465,22 @@ expect(world.Name == config.World.RootName, "world root name does not match conf
 expect(world.Name == "PannaDistrict", "district root must be named PannaDistrict")
 expect(world:GetAttribute("ArenaCount") == 6, "district must declare six arenas")
 expect(world:GetAttribute("DistrictName") == "PannaDistrict", "district identity is missing")
+local environment = world:FindFirstChild("DistrictEnvironment")
+expect(environment ~= nil and environment:IsA("Model"), "DistrictEnvironment is missing")
+expect(
+	environment:GetAttribute("DistrictStyle") == "BrightDayFootballDistrict",
+	"district did not use the bright football visual style"
+)
+expect(
+	Lighting.ClockTime >= 12 and Lighting.ClockTime <= 16,
+	"district is not configured for daylight"
+)
+expect(Lighting.Brightness >= 2.8, "daylight brightness is too low")
+expect(Lighting:FindFirstChild("PannaSunRays") ~= nil, "daylight sun rays are missing")
 local lobbySpawn = world:FindFirstChild("LobbySpawn", true)
 expect(lobbySpawn ~= nil and lobbySpawn:IsA("BasePart"), "LobbySpawn is missing")
 expect(world:FindFirstChild("QueuePrompt", true) ~= nil, "QueuePrompt is missing")
 
-local environment = world:FindFirstChild("DistrictEnvironment")
-expect(environment ~= nil and environment:IsA("Model"), "DistrictEnvironment is missing")
 expect(
 	environment:GetAttribute("ExternalAssetCount") == 0,
 	"district must use zero external assets"
@@ -267,6 +562,26 @@ for _, arena in arenaList do
 	expect(arena.EntryPrompt.Enabled, arena.Id .. " EntryPrompt must be enabled while Free")
 	expect(not arena.ExitPrompt.Enabled, arena.Id .. " ExitPrompt must be disabled while Free")
 	expect(not arena.Barrier.CanCollide, arena.Id .. " Barrier must be open while Free")
+	expect(arena.Model:FindFirstChild("PitchFinish") ~= nil, arena.Id .. " pitch finish missing")
+	expect(arena.Model:FindFirstChild("LeftTouchLine") ~= nil, arena.Id .. " touch line missing")
+	expect(arena.Model:FindFirstChild("HomePenaltyLine") ~= nil, arena.Id .. " penalty box missing")
+	for _, goalName in { "HomeGoalFrame", "AwayGoalFrame" } do
+		local goalFrame = arena.Model:FindFirstChild(goalName)
+		expect(
+			goalFrame ~= nil and goalFrame:IsA("Model"),
+			arena.Id .. " " .. goalName .. " missing"
+		)
+		local crossbar = goalFrame:FindFirstChild("Crossbar")
+		local teamAccent = goalFrame:FindFirstChild("TeamAccent")
+		expect(
+			crossbar ~= nil
+				and crossbar:IsA("BasePart")
+				and crossbar.Material == Enum.Material.Metal
+				and crossbar.Color == Color3.fromRGB(235, 247, 255),
+			arena.Id .. " " .. goalName .. " does not use a readable football frame"
+		)
+		expect(teamAccent ~= nil and teamAccent:IsA("BasePart"), arena.Id .. " goal accent missing")
+	end
 	expect(
 		arena.Ball:IsA("BasePart") and not arena.Ball.Anchored,
 		arena.Id .. " ball must be physical"
@@ -385,6 +700,10 @@ for _, arena in arenaList do
 		arena.Id .. " control force must use world space"
 	)
 	expect(resolvedForce.Force.Magnitude < 1e-4, arena.Id .. " control force must start at zero")
+	expect(
+		not resolvedForce.Enabled,
+		arena.Id .. " legacy control force must remain disabled for kinematic possession"
+	)
 	expect(trailTop ~= nil and trailTop:IsA("Attachment"), arena.Id .. " trail top missing")
 	expect(
 		trailBottom ~= nil and trailBottom:IsA("Attachment"),
@@ -405,8 +724,142 @@ for _, arena in arenaList do
 	)
 	local state = ballService.states[arena.Id]
 	expect(state.controlForce == resolvedForce, arena.Id .. " runtime state lost control force")
+	expect(state.controlPosition == nil, arena.Id .. " runtime state kept stale control position")
 	expect(state.trail == resolvedTrail, arena.Id .. " runtime state lost speed trail")
 	expect(state.mode == "Reset", arena.Id .. " runtime state must start Reset")
+end
+
+local function newMatchHarnessPlayer(name: string, userId: number): (any, Humanoid, Model)
+	local character = Instance.new("Model")
+	character.Name = name .. "Character"
+	local humanoid = Instance.new("Humanoid")
+	humanoid.WalkSpeed = 18
+	humanoid.JumpHeight = 7.2
+	humanoid.JumpPower = 50
+	humanoid.Parent = character
+	local attributes: { [string]: any } = {}
+	local player: any = {
+		Name = name,
+		DisplayName = name,
+		UserId = userId,
+		Parent = Workspace,
+		Character = character,
+	}
+	function player:SetAttribute(attributeName: string, value: any)
+		attributes[attributeName] = value
+	end
+	function player:GetAttribute(attributeName: string): any
+		return attributes[attributeName]
+	end
+	return player, humanoid, character
+end
+
+for cycle = 1, 3 do
+	local home, homeHumanoid, homeCharacter =
+		newMatchHarnessPlayer("CycleHome" .. cycle, 10_000 + cycle)
+	local away, awayHumanoid, awayCharacter =
+		newMatchHarnessPlayer("CycleAway" .. cycle, 20_000 + cycle)
+	local arena: any = { Id = "CycleArena" .. cycle }
+	local match: any = {
+		Id = "CycleMatch" .. cycle,
+		Revision = cycle,
+		Arena = arena,
+		Home = home,
+		Away = away,
+		RematchVotes = {},
+	}
+	local detachCount = 0
+	local releaseCount = 0
+	local returnCount = 0
+	local stateClearCount = 0
+	local effectCount = 0
+	local service: any = {
+		_setControlsLocked = matchServiceModule._setControlsLocked,
+		matches = { [match.Id] = match },
+		goalPositions = { [match.Id] = Vector3.zero },
+		byPlayer = { [home] = match, [away] = match },
+		ballService = {
+			DetachMatch = function(_self: any, detachedMatch: any)
+				expect(detachedMatch == match, "cleanup detached the wrong match")
+				detachCount += 1
+			end,
+		},
+		arenas = {
+			Release = function(_self: any, releasedArena: any)
+				expect(releasedArena == arena, "cleanup released the wrong arena")
+				releaseCount += 1
+			end,
+			ReturnToStreet = function(_self: any, returnedArena: any, returnedPlayer: any)
+				expect(returnedArena == arena, "cleanup returned through the wrong arena")
+				expect(
+					returnedPlayer == home or returnedPlayer == away,
+					"cleanup returned a stranger"
+				)
+				returnCount += 1
+			end,
+		},
+		remotes = {
+			Effect = {
+				FireClient = function(_self: any, target: any, payload: any)
+					expect(target == home or target == away, "effect notified a stranger")
+					expect(payload.matchId == match.Id, "match effect was not scoped")
+					expect(payload.arenaId == arena.Id, "arena effect was not scoped")
+					expect(
+						payload.matchRevision == match.Revision,
+						"effect revision was not scoped"
+					)
+					effectCount += 1
+				end,
+			},
+			StateUpdate = {
+				FireClient = function(_self: any, target: any, payload: any)
+					expect(target == home or target == away, "cleanup notified a stranger")
+					expect(payload.match == false, "cleanup did not clear the match snapshot")
+					expect(
+						payload.matchRevision == match.Revision,
+						"cleanup did not preserve the match revision"
+					)
+					stateClearCount += 1
+				end,
+			},
+		},
+		onRematchReady = nil,
+		onArenaReleased = nil,
+	}
+
+	local unscopedEffect = { kind = "Message" }
+	matchServiceModule._effect(service, match, unscopedEffect)
+	expect(effectCount == 2, "match effect did not reach both participants")
+	expect(unscopedEffect.matchId == nil, "effect scoping mutated the caller payload")
+	matchServiceModule._setControlsLocked(service, match, true)
+	expect(home:GetAttribute("ControlsLocked") == true, "home did not lock before cleanup")
+	expect(away:GetAttribute("ControlsLocked") == true, "away did not lock before cleanup")
+	expect(homeHumanoid.WalkSpeed == 0 and awayHumanoid.WalkSpeed == 0, "result lock kept movement")
+
+	matchServiceModule._cleanup(service, match)
+	expect(home:GetAttribute("ControlsLocked") == false, "home stayed locked after cleanup")
+	expect(away:GetAttribute("ControlsLocked") == false, "away stayed locked after cleanup")
+	for _, humanoid in { homeHumanoid, awayHumanoid } do
+		expect(humanoid.WalkSpeed == 18, "cleanup did not restore WalkSpeed")
+		expect(math.abs(humanoid.JumpHeight - 7.2) < 1e-4, "cleanup did not restore JumpHeight")
+		expect(humanoid.JumpPower == 50, "cleanup did not restore JumpPower")
+	end
+	expect(home:GetAttribute("InMatch") == false, "home kept InMatch after cleanup")
+	expect(away:GetAttribute("InMatch") == false, "away kept InMatch after cleanup")
+	expect(home:GetAttribute("MatchId") == "", "home kept MatchId after cleanup")
+	expect(away:GetAttribute("MatchId") == "", "away kept MatchId after cleanup")
+	expect(service.matches[match.Id] == nil, "cleanup kept match registry entry")
+	expect(
+		service.byPlayer[home] == nil and service.byPlayer[away] == nil,
+		"cleanup kept player registry"
+	)
+	expect(detachCount == 1 and releaseCount == 1, "cleanup did not release runtime exactly once")
+	expect(
+		returnCount == 2 and stateClearCount == 2,
+		"cleanup did not restore both players exactly once"
+	)
+	homeCharacter:Destroy()
+	awayCharacter:Destroy()
 end
 
 local remotes = remoteRegistry.Create(net)

@@ -27,15 +27,15 @@
     },
     "Lighting": {
       "$properties": {
-        "ClockTime": 20.2,
-        "Brightness": 2.2,
-        "ExposureCompensation": 0.1,
-        "Ambient": [0.1450980392, 0.1254901961, 0.2196078431],
-        "OutdoorAmbient": [0.0941176471, 0.1333333333, 0.2039215686],
-        "EnvironmentDiffuseScale": 0.38,
-        "EnvironmentSpecularScale": 0.72,
+        "ClockTime": 14.15,
+        "Brightness": 3.0,
+        "ExposureCompensation": 0.18,
+        "Ambient": [0.5647058824, 0.6196078431, 0.6823529412],
+        "OutdoorAmbient": [0.6901960784, 0.7450980392, 0.8039215686],
+        "EnvironmentDiffuseScale": 0.72,
+        "EnvironmentSpecularScale": 0.5,
         "GlobalShadows": true,
-        "ShadowSoftness": 0.3
+        "ShadowSoftness": 0.55
       },
       "PannaAtmosphere": {
         "$className": "Atmosphere",
@@ -43,12 +43,12 @@
           "Attributes": {
             "PannaDistrictBuilderEffect": { "Bool": true }
           },
-          "Density": 0.28,
-          "Offset": 0.08,
-          "Color": [0.4901960784, 0.5568627451, 0.7098039216],
-          "Decay": [0.1921568627, 0.1333333333, 0.3019607843],
-          "Glare": 0.08,
-          "Haze": 1.25
+          "Density": 0.18,
+          "Offset": 0.2,
+          "Color": [0.7803921569, 0.8823529412, 1.0],
+          "Decay": [0.4745098039, 0.6156862745, 0.7450980392],
+          "Glare": 0.06,
+          "Haze": 0.65
         }
       },
       "PannaColorGrade": {
@@ -58,10 +58,10 @@
             "PannaDistrictBuilderEffect": { "Bool": true }
           },
           "Enabled": true,
-          "Brightness": -0.02,
-          "Contrast": 0.08,
-          "Saturation": 0.12,
-          "TintColor": [0.8784313725, 0.8941176471, 1.0]
+          "Brightness": 0.04,
+          "Contrast": 0.06,
+          "Saturation": 0.08,
+          "TintColor": [1.0, 0.9725490196, 0.9215686275]
         }
       },
       "PannaNeonBloom": {
@@ -71,9 +71,20 @@
             "PannaDistrictBuilderEffect": { "Bool": true }
           },
           "Enabled": true,
-          "Intensity": 0.34,
-          "Size": 28,
-          "Threshold": 1.15
+          "Intensity": 0.12,
+          "Size": 18,
+          "Threshold": 1.4
+        }
+      },
+      "PannaSunRays": {
+        "$className": "SunRaysEffect",
+        "$properties": {
+          "Attributes": {
+            "PannaDistrictBuilderEffect": { "Bool": true }
+          },
+          "Enabled": true,
+          "Intensity": 0.035,
+          "Spread": 0.72
         }
       }
     },

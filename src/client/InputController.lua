@@ -57,6 +57,8 @@ type TimingSettings = {
 	passChargeSeconds: number,
 	minimumKickPower: number,
 	minimumPassPower: number,
+	kickPowerExponent: number,
+	passPowerExponent: number,
 	pendingTimeoutSeconds: number,
 	trapBufferSeconds: number,
 }
@@ -66,6 +68,8 @@ local DEFAULT_TIMINGS: TimingSettings = table.freeze({
 	passChargeSeconds = 0.85,
 	minimumKickPower = 0.12,
 	minimumPassPower = 0.16,
+	kickPowerExponent = 0.82,
+	passPowerExponent = 0.9,
 	pendingTimeoutSeconds = 2.1,
 	trapBufferSeconds = 0.8,
 })
@@ -78,6 +82,7 @@ type UIControllerLike = {
 	SetActionActive: (self: any, action: string, active: boolean) -> (),
 	SetActionPending: (self: any, action: string, pending: boolean) -> (),
 	ApplyActionFeedback: (self: any, feedback: any) -> (),
+	ResetTransientState: (self: any) -> (),
 	IsGameplayActive: (self: any) -> boolean,
 	IsPointerOverUI: (self: any) -> boolean,
 }
@@ -110,6 +115,8 @@ type ControllerFields = {
 	_passChargeSeconds: number,
 	_minimumKickPower: number,
 	_minimumPassPower: number,
+	_kickPowerExponent: number,
+	_passPowerExponent: number,
 	_pendingTimeoutSeconds: number,
 	_trapBufferSeconds: number,
 	_nextSequence: number,
@@ -183,6 +190,17 @@ local function validNumber(value: any, minimum: number): boolean
 		and value >= minimum
 end
 
+local function chargePower(
+	elapsed: number,
+	duration: number,
+	minimumPower: number,
+	exponent: number
+): number
+	local normalized = math.clamp(elapsed / math.max(0.01, duration), 0, 1)
+	local minimum = math.clamp(minimumPower, 0, 1)
+	return minimum + (1 - minimum) * normalized ^ math.max(0.01, exponent)
+end
+
 local function loadActionSettings(): ({ [string]: number }, number, TimingSettings)
 	local cooldowns: { [string]: number } = table.clone(DEFAULT_COOLDOWNS :: any)
 	local shieldMaxSeconds = 2.5
@@ -207,8 +225,9 @@ local function loadActionSettings(): ({ [string]: number }, number, TimingSettin
 				cooldowns[action] = value
 			end
 		end
-		if validNumber(actions.ShieldMaxSeconds, 0.01) then
-			shieldMaxSeconds = actions.ShieldMaxSeconds
+		local shield = actions.Shield
+		if typeof(shield) == "table" and validNumber(shield.MaximumSeconds, 0.01) then
+			shieldMaxSeconds = shield.MaximumSeconds
 		end
 	end
 
@@ -222,6 +241,9 @@ local function loadActionSettings(): ({ [string]: number }, number, TimingSettin
 			if validNumber(shot.MinimumPower, 0) then
 				timings.minimumKickPower = math.clamp(shot.MinimumPower, 0, 1)
 			end
+			if validNumber(shot.PowerExponent, 0.01) then
+				timings.kickPowerExponent = shot.PowerExponent
+			end
 		end
 		local pass = ball.Pass
 		if typeof(pass) == "table" then
@@ -230,6 +252,9 @@ local function loadActionSettings(): ({ [string]: number }, number, TimingSettin
 			end
 			if validNumber(pass.MinimumPower, 0) then
 				timings.minimumPassPower = math.clamp(pass.MinimumPower, 0, 1)
+			end
+			if validNumber(pass.PowerExponent, 0.01) then
+				timings.passPowerExponent = pass.PowerExponent
 			end
 		end
 		local firstTouch = ball.FirstTouch
@@ -313,6 +338,8 @@ function InputController.new(actionRequest: RemoteEvent, ui: UIControllerLike): 
 		_passChargeSeconds = timings.passChargeSeconds,
 		_minimumKickPower = timings.minimumKickPower,
 		_minimumPassPower = timings.minimumPassPower,
+		_kickPowerExponent = timings.kickPowerExponent,
+		_passPowerExponent = timings.passPowerExponent,
 		_pendingTimeoutSeconds = timings.pendingTimeoutSeconds,
 		_trapBufferSeconds = timings.trapBufferSeconds,
 		_nextSequence = 0,
@@ -355,7 +382,12 @@ function InputController.new(actionRequest: RemoteEvent, ui: UIControllerLike): 
 		UserInputService.WindowFocusReleased:Connect(cancelTransientInput)
 	)
 	table.insert(self._connections, GuiService.MenuOpened:Connect(cancelTransientInput))
-	table.insert(self._connections, LOCAL_PLAYER.CharacterRemoving:Connect(cancelTransientInput))
+	table.insert(
+		self._connections,
+		LOCAL_PLAYER.CharacterRemoving:Connect(function()
+			self:ResetTransientState()
+		end)
+	)
 	table.insert(
 		self._connections,
 		UserInputService.LastInputTypeChanged:Connect(function()
@@ -385,6 +417,14 @@ end
 
 function InputController._actionReady(self: InputController, action: string): boolean
 	return os.clock() >= (self._cooldownEnds[action] or 0) and self._pendingByAction[action] == nil
+end
+
+function InputController._isGameplayActive(self: InputController): boolean
+	return self._ui:IsGameplayActive()
+		and LOCAL_PLAYER:GetAttribute("InMatch") == true
+		and LOCAL_PLAYER:GetAttribute("ControlsLocked") ~= true
+		and self:_arenaId() ~= ""
+		and self:_matchId() ~= ""
 end
 
 function InputController._arenaId(_self: InputController): string
@@ -522,6 +562,14 @@ function InputController._directionForAction(
 	return direction, moveDirection
 end
 
+function InputController._kickSpin(self: InputController): number
+	local direction, moveDirection = self:_directionForAction("Kick")
+	if moveDirection.Magnitude < 0.05 then
+		return 0
+	end
+	return math.clamp(direction:Cross(moveDirection.Unit).Y, -1, 1)
+end
+
 function InputController._requestKey(
 	_self: InputController,
 	action: string,
@@ -545,7 +593,12 @@ function InputController._sendRequest(
 	if self._destroyed or self._actionRequest.Parent == nil then
 		return false, nil
 	end
-	if not allowInactive and (inputIsBlocked() or not self._ui:IsGameplayActive()) then
+	local arenaId = self:_arenaId()
+	local matchId = self:_matchId()
+	if arenaId == "" or matchId == "" or LOCAL_PLAYER:GetAttribute("InMatch") ~= true then
+		return false, nil
+	end
+	if not allowInactive and (inputIsBlocked() or not self:_isGameplayActive()) then
 		return false, nil
 	end
 	if uiAction and not self:_actionReady(uiAction) then
@@ -564,8 +617,6 @@ function InputController._sendRequest(
 		self._nextSequence = 1
 	end
 	local sequence = self._nextSequence
-	local arenaId = self:_arenaId()
-	local matchId = self:_matchId()
 	local _, _, _, ballRevision = self:_ballContext()
 	local direction, moveDirection = self:_directionForAction(action)
 	local payload: { [string]: any } = {
@@ -623,30 +674,32 @@ function InputController._clearPending(self: InputController, sequence: number):
 	return pending
 end
 
-function InputController.ApplyActionFeedback(self: InputController, feedback: any)
+function InputController.ApplyActionFeedback(self: InputController, feedback: any): boolean
 	if self._destroyed or typeof(feedback) ~= "table" then
-		return
+		return false
 	end
 	local sequenceValue = feedback.sequence
 	if typeof(sequenceValue) ~= "number" then
-		return
+		return false
 	end
 	local sequence = math.floor(sequenceValue)
 	local pending = self:_clearPending(sequence)
-	local feedbackRevision = feedback.revision
-	if pending and validNumber(feedbackRevision, 0) then
-		local arenaId = self:_arenaId()
-		local matchId = self:_matchId()
-		if pending.arenaId == arenaId and pending.matchId == matchId then
-			local cachedRevision = self:_feedbackRevisionForContext(arenaId, matchId)
-			self._feedbackRevision = math.max(cachedRevision, math.floor(feedbackRevision))
-		end
+	if not pending then
+		return false
 	end
-	local action = if typeof(feedback.action) == "string"
-		then feedback.action
-		else if pending then pending.action else ""
+	local arenaId = self:_arenaId()
+	local matchId = self:_matchId()
+	if pending.arenaId ~= arenaId or pending.matchId ~= matchId then
+		return false
+	end
+	local feedbackRevision = feedback.revision
+	if validNumber(feedbackRevision, 0) then
+		local cachedRevision = self:_feedbackRevisionForContext(arenaId, matchId)
+		self._feedbackRevision = math.max(cachedRevision, math.floor(feedbackRevision))
+	end
+	local action = if typeof(feedback.action) == "string" then feedback.action else pending.action
 	local accepted = feedback.accepted == true
-	local uiAction = if pending and pending.uiAction
+	local uiAction = if pending.uiAction
 		then pending.uiAction
 		else if action == "Trap" then "Shield" else action
 	if accepted and uiAction ~= "" and action ~= "ChargeStart" then
@@ -660,14 +713,9 @@ function InputController.ApplyActionFeedback(self: InputController, feedback: an
 		end
 	end
 
-	if
-		action == "ChargeStart"
-		and not accepted
-		and pending
-		and self._chargingAction == pending.mode
-	then
+	if action == "ChargeStart" and not accepted and self._chargingAction == pending.mode then
 		self:_cancelCharge()
-	elseif action == "Shield" and pending then
+	elseif action == "Shield" then
 		if pending.active == true then
 			if accepted and self._shieldHeld then
 				self._shielding = true
@@ -684,10 +732,11 @@ function InputController.ApplyActionFeedback(self: InputController, feedback: an
 	elseif action == "Trap" and not accepted then
 		self._trapBufferEndsAt = 0
 		self._ui:SetPowerMeter("Trap", 0, false, "Trap")
-	elseif action == "Feint" and accepted and pending and pending.mode == "Roulette" then
+	elseif action == "Feint" and accepted and pending.mode == "Roulette" then
 		self._shielding = false
 		self._ui:SetActionActive("Shield", false)
 	end
+	return true
 end
 
 function InputController._cancelCharge(self: InputController)
@@ -701,12 +750,50 @@ function InputController._cancelCharge(self: InputController)
 	self._ui:SetPowerMeter(action, 0, false, if action == "Kick" then self:_shotType() else nil)
 end
 
+function InputController.ResetTransientState(self: InputController)
+	if self._destroyed then
+		return
+	end
+
+	self:_cancelCharge()
+	self._chargingAction = nil
+	self._chargeInputId = nil
+	self._chargeToken += 1
+	self._chargeStartedAt = 0
+	self._shieldHeld = false
+	self:_stopShield(false)
+	self._shieldStartedAt = 0
+	self._trapBufferEndsAt = 0
+
+	for _, action in ACTION_ORDER do
+		self._ui:SetActionPending(action, false)
+		self._ui:SetActionActive(action, false)
+	end
+	table.clear(self._pending)
+	table.clear(self._pendingByAction)
+	table.clear(self._cooldownEnds)
+	table.clear(self._lastSentAt)
+
+	self._cachedBall = nil
+	self._cachedArenaId = self:_arenaId()
+	self._feedbackArenaId = self:_arenaId()
+	self._feedbackMatchId = self:_matchId()
+	self._feedbackRevision = 0
+
+	for _, button in self._touchButtons do
+		if button.Parent ~= nil then
+			button.Visible = false
+		end
+	end
+	self._ui:ResetTransientState()
+end
+
 function InputController._beginCharge(
 	self: InputController,
 	action: string,
 	input: InputObject
 ): Enum.ContextActionResult
-	if inputIsBlocked() or not self._ui:IsGameplayActive() then
+	if inputIsBlocked() or not self:_isGameplayActive() then
 		return Enum.ContextActionResult.Pass
 	end
 	if self._chargingAction or not self:_actionReady(action) then
@@ -724,7 +811,13 @@ function InputController._beginCharge(
 	self._chargeStartedAt = os.clock()
 	self._chargeInputId = inputId(input)
 	self._chargeToken += 1
-	self._ui:SetPowerMeter(action, 0, true, if action == "Kick" then self:_shotType() else nil)
+	local minimumPower = if action == "Kick" then self._minimumKickPower else self._minimumPassPower
+	self._ui:SetPowerMeter(
+		action,
+		minimumPower,
+		true,
+		if action == "Kick" then self:_shotType() else nil
+	)
 	self:_sendRequest("ChargeStart", nil, { chargeAction = action }, false)
 	return Enum.ContextActionResult.Sink
 end
@@ -743,16 +836,21 @@ function InputController._finishCharge(
 		then self._kickChargeSeconds
 		else self._passChargeSeconds
 	local minimumPower = if action == "Kick" then self._minimumKickPower else self._minimumPassPower
-	local power = math.clamp((os.clock() - self._chargeStartedAt) / chargeSeconds, minimumPower, 1)
+	local powerExponent = if action == "Kick"
+		then self._kickPowerExponent
+		else self._passPowerExponent
+	local power =
+		chargePower(os.clock() - self._chargeStartedAt, chargeSeconds, minimumPower, powerExponent)
 	self._chargingAction = nil
 	self._chargeInputId = nil
 	self._chargeToken += 1
 	self._ui:SetPowerMeter(action, 0, false, if action == "Kick" then self:_shotType() else nil)
-	if not cancelled and self._ui:IsGameplayActive() then
+	if not cancelled and self:_isGameplayActive() then
 		if action == "Kick" then
 			self:_sendRequest("Kick", "Kick", {
 				power = power,
 				shotType = self:_shotType(),
+				spin = self:_kickSpin(),
 			}, false)
 		else
 			self:_sendRequest("Pass", "Pass", { power = power }, false)
@@ -815,7 +913,7 @@ function InputController._onInstantAction(
 	if inputState ~= Enum.UserInputState.Begin then
 		return Enum.ContextActionResult.Pass
 	end
-	if inputIsBlocked() or not self._ui:IsGameplayActive() then
+	if inputIsBlocked() or not self:_isGameplayActive() then
 		return Enum.ContextActionResult.Pass
 	end
 	local extra = if action == "Feint" then self:_feintPayload() else nil
@@ -823,14 +921,16 @@ function InputController._onInstantAction(
 	return Enum.ContextActionResult.Sink
 end
 
-function InputController._stopShield(self: InputController)
+function InputController._stopShield(self: InputController, notifyServer: boolean?)
 	if not self._shielding then
 		self._ui:SetActionActive("Shield", false)
 		return
 	end
 	self._shielding = false
 	self._ui:SetActionActive("Shield", false)
-	self:_sendRequest("Shield", nil, { active = false }, true)
+	if notifyServer ~= false then
+		self:_sendRequest("Shield", nil, { active = false }, true)
+	end
 end
 
 function InputController._onShield(
@@ -840,7 +940,7 @@ function InputController._onShield(
 	_: InputObject
 ): Enum.ContextActionResult
 	if inputState == Enum.UserInputState.Begin then
-		if inputIsBlocked() or not self._ui:IsGameplayActive() then
+		if inputIsBlocked() or not self:_isGameplayActive() then
 			return Enum.ContextActionResult.Pass
 		end
 		if self._shieldHeld then
@@ -878,15 +978,19 @@ function InputController._onShotMode(
 	if inputState ~= Enum.UserInputState.Begin then
 		return Enum.ContextActionResult.Pass
 	end
-	if inputIsBlocked() or not self._ui:IsGameplayActive() then
+	if inputIsBlocked() or not self:_isGameplayActive() then
 		return Enum.ContextActionResult.Pass
 	end
 	self._shotTypeIndex = self._shotTypeIndex % #SHOT_TYPES + 1
 	local shotType = self:_shotType()
 	self._ui:SetShotMode(shotType)
 	if self._chargingAction == "Kick" then
-		local power =
-			math.clamp((os.clock() - self._chargeStartedAt) / self._kickChargeSeconds, 0, 1)
+		local power = chargePower(
+			os.clock() - self._chargeStartedAt,
+			self._kickChargeSeconds,
+			self._minimumKickPower,
+			self._kickPowerExponent
+		)
 		self._ui:SetPowerMeter("Kick", power, true, shotType)
 	end
 	self:_setTouchTitle("ShotMode", "SHOT\n" .. string.upper(shotType))
@@ -984,7 +1088,7 @@ end
 
 function InputController._updateFeedback(self: InputController)
 	local now = os.clock()
-	local gameplayActive = self._ui:IsGameplayActive()
+	local gameplayActive = self:_isGameplayActive()
 	local _, ballState, ownerUserId = self:_ballContext()
 	self._ui:SetBallStatus(ballState, ownerUserId)
 	for _, action in ACTION_ORDER do
@@ -1047,14 +1151,20 @@ function InputController._onRenderStep(self: InputController)
 		return
 	end
 	local now = os.clock()
-	local gameplayActive = self._ui:IsGameplayActive()
+	local gameplayActive = self:_isGameplayActive()
 	if self._chargingAction then
 		if gameplayActive then
 			local action = self._chargingAction
 			local duration = if action == "Kick"
 				then self._kickChargeSeconds
 				else self._passChargeSeconds
-			local power = math.clamp((now - self._chargeStartedAt) / duration, 0, 1)
+			local minimumPower = if action == "Kick"
+				then self._minimumKickPower
+				else self._minimumPassPower
+			local exponent = if action == "Kick"
+				then self._kickPowerExponent
+				else self._passPowerExponent
+			local power = chargePower(now - self._chargeStartedAt, duration, minimumPower, exponent)
 			self._ui:SetPowerMeter(
 				action,
 				power,
@@ -1139,11 +1249,8 @@ function InputController.Destroy(self: InputController)
 	if self._destroyed then
 		return
 	end
-	self._shieldHeld = false
-	self:_stopShield()
+	self:ResetTransientState()
 	self._destroyed = true
-	self:_cancelCharge()
-	self._trapBufferEndsAt = 0
 	if self._renderConnection then
 		self._renderConnection:Disconnect()
 		self._renderConnection = nil
@@ -1155,8 +1262,6 @@ function InputController.Destroy(self: InputController)
 	for _, actionName in BINDINGS do
 		ContextActionService:UnbindAction(actionName)
 	end
-	self._ui:SetActionActive("Shield", false)
-	self._ui:SetPowerMeter("Kick", 0, false, self:_shotType())
 end
 
 return InputController

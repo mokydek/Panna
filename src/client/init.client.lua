@@ -2,9 +2,11 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local UIController = require(script:WaitForChild("UIController") :: ModuleScript)
 local InputController = require(script:WaitForChild("InputController") :: ModuleScript)
+local EffectScope = require(script:WaitForChild("EffectScope") :: ModuleScript)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local REMOTE_WAIT_SECONDS = 20
@@ -84,12 +86,139 @@ local ui = UIController.new()
 local inputController: any = nil
 local connections: { RBXScriptConnection } = {}
 local destroyed = false
+local controlsRestoreToken = 0
+
+local function stringAttribute(name: string): string
+	local value = LOCAL_PLAYER:GetAttribute(name)
+	return if typeof(value) == "string" then value else ""
+end
+
+local function revisionAttribute(): number
+	local value = LOCAL_PLAYER:GetAttribute("MatchRevision")
+	return if type(value) == "number"
+			and value == value
+			and value >= 1
+		then math.floor(value)
+		else 0
+end
+
+local function resetTransientClientState()
+	if destroyed then
+		return
+	end
+	if inputController then
+		inputController:ResetTransientState()
+	else
+		ui:ResetTransientState()
+	end
+end
+
+local function restoreDefaultControls()
+	controlsRestoreToken += 1
+	local token = controlsRestoreToken
+	task.spawn(function()
+		local playerScripts = LOCAL_PLAYER:FindFirstChild("PlayerScripts")
+			or LOCAL_PLAYER:WaitForChild("PlayerScripts", 8)
+		if destroyed or token ~= controlsRestoreToken then
+			return
+		end
+		if LOCAL_PLAYER:GetAttribute("ControlsLocked") == true then
+			return
+		end
+
+		if playerScripts then
+			local playerModuleInstance = playerScripts:FindFirstChild("PlayerModule")
+				or playerScripts:WaitForChild("PlayerModule", 8)
+			if
+				playerModuleInstance
+				and playerModuleInstance:IsA("ModuleScript")
+				and not destroyed
+				and token == controlsRestoreToken
+				and LOCAL_PLAYER:GetAttribute("ControlsLocked") ~= true
+			then
+				local moduleSuccess, playerModule = pcall(require, playerModuleInstance)
+				if moduleSuccess and typeof(playerModule) == "table" then
+					local controlsSuccess, controls = pcall(function(): any
+						return playerModule:GetControls()
+					end)
+					if
+						controlsSuccess
+						and typeof(controls) == "table"
+						and not destroyed
+						and token == controlsRestoreToken
+						and LOCAL_PLAYER:GetAttribute("ControlsLocked") ~= true
+					then
+						pcall(function()
+							controls:Enable()
+						end)
+					end
+				end
+			end
+		end
+
+		if
+			destroyed
+			or token ~= controlsRestoreToken
+			or LOCAL_PLAYER:GetAttribute("ControlsLocked") == true
+		then
+			return
+		end
+		local character = LOCAL_PLAYER.Character
+		local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
+		local camera = Workspace.CurrentCamera
+		if character and humanoid and humanoid.Health > 0 and camera then
+			camera.CameraType = Enum.CameraType.Custom
+			camera.CameraSubject = humanoid
+		end
+	end)
+end
+
+local lastInMatch = LOCAL_PLAYER:GetAttribute("InMatch") == true
+local lastControlsLocked = LOCAL_PLAYER:GetAttribute("ControlsLocked") == true
+local lastArenaId = stringAttribute("ArenaId")
+local lastMatchId = stringAttribute("MatchId")
+local recentArenaId = lastArenaId
+local recentMatchId = lastMatchId
+local recentMatchRevision = revisionAttribute()
+
+local function handleMatchContextChanged()
+	if destroyed then
+		return
+	end
+	local inMatch = LOCAL_PLAYER:GetAttribute("InMatch") == true
+	local controlsLocked = LOCAL_PLAYER:GetAttribute("ControlsLocked") == true
+	local arenaId = stringAttribute("ArenaId")
+	local matchId = stringAttribute("MatchId")
+	local identityChanged = arenaId ~= lastArenaId or matchId ~= lastMatchId
+	local leftMatch = lastInMatch and not inMatch
+	local enteredMatch = not lastInMatch and inMatch
+	local becameLocked = not lastControlsLocked and controlsLocked
+	local becameUnlocked = lastControlsLocked and not controlsLocked
+	if enteredMatch then
+		controlsRestoreToken += 1
+	end
+	if identityChanged or enteredMatch or leftMatch or becameLocked then
+		resetTransientClientState()
+	end
+	if leftMatch then
+		ui:SetMatchState(nil)
+	end
+	if (leftMatch or becameUnlocked) and not controlsLocked then
+		restoreDefaultControls()
+	end
+
+	lastInMatch = inMatch
+	lastControlsLocked = controlsLocked
+	lastArenaId = arenaId
+	lastMatchId = matchId
+end
 
 local function destroy()
 	if destroyed then
 		return
 	end
 	destroyed = true
+	controlsRestoreToken += 1
 	if inputController then
 		inputController:Destroy()
 		inputController = nil
@@ -103,35 +232,39 @@ end
 
 table.insert(connections, script.Destroying:Connect(destroy))
 
--- Character-dependent input reads are always guarded. A cancellable one-shot listener
--- warms the first character without leaving an event wait behind when the script is removed.
-do
-	local warmed = false
-	local characterConnection: RBXScriptConnection? = nil
-	local function warmCharacter(character: Model)
-		if warmed then
-			return
-		end
-		warmed = true
-		if characterConnection then
-			characterConnection:Disconnect()
-			characterConnection = nil
-		end
+for _, attributeName in { "InMatch", "ControlsLocked", "ArenaId", "MatchId", "MatchRevision" } do
+	table.insert(
+		connections,
+		LOCAL_PLAYER:GetAttributeChangedSignal(attributeName):Connect(handleMatchContextChanged)
+	)
+end
+table.insert(
+	connections,
+	LOCAL_PLAYER.CharacterRemoving:Connect(function()
+		controlsRestoreToken += 1
+		resetTransientClientState()
+	end)
+)
+table.insert(
+	connections,
+	LOCAL_PLAYER.CharacterAdded:Connect(function(character: Model)
+		resetTransientClientState()
 		task.spawn(function()
-			if destroyed or character.Parent == nil then
-				return
+			local humanoid = character:WaitForChild("Humanoid", 8)
+			if
+				not destroyed
+				and character == LOCAL_PLAYER.Character
+				and humanoid
+				and humanoid:IsA("Humanoid")
+				and LOCAL_PLAYER:GetAttribute("ControlsLocked") ~= true
+			then
+				restoreDefaultControls()
 			end
-			character:WaitForChild("HumanoidRootPart", 10)
 		end)
-	end
-
-	local connection = LOCAL_PLAYER.CharacterAdded:Connect(warmCharacter)
-	characterConnection = connection
-	table.insert(connections, connection)
-	local currentCharacter = LOCAL_PLAYER.Character
-	if currentCharacter then
-		warmCharacter(currentCharacter)
-	end
+	end)
+)
+if LOCAL_PLAYER:GetAttribute("ControlsLocked") ~= true then
+	restoreDefaultControls()
 end
 
 task.spawn(function()
@@ -201,9 +334,10 @@ task.spawn(function()
 				return
 			end
 			local success, message = pcall(function()
-				ui:ApplyActionFeedback(payload)
 				if inputController then
-					inputController:ApplyActionFeedback(payload)
+					if inputController:ApplyActionFeedback(payload) then
+						ui:ApplyActionFeedback(payload)
+					end
 				else
 					table.insert(feedbackBeforeInput, payload)
 				end
@@ -221,7 +355,21 @@ task.spawn(function()
 				return
 			end
 			local success, message = pcall(function()
-				ui:ApplyState(payload, false)
+				local stateMatchId, stateArenaId, stateRevision =
+					EffectScope.ReadStateContext(payload)
+				local envelopeRevision = EffectScope.ReadStateRevision(payload)
+				local knownRevision = math.max(revisionAttribute(), recentMatchRevision)
+				local allowMatchState = envelopeRevision <= 0 or envelopeRevision >= knownRevision
+				if stateMatchId ~= "" and stateRevision >= recentMatchRevision then
+					recentMatchId = stateMatchId
+					recentArenaId = stateArenaId
+					recentMatchRevision = stateRevision
+				end
+				local wasGameplayActive = ui:IsGameplayActive()
+				ui:ApplyState(payload, false, allowMatchState)
+				if wasGameplayActive and not ui:IsGameplayActive() then
+					resetTransientClientState()
+				end
 			end)
 			if not success then
 				warn("[PannaClient] Rejected malformed StateUpdate:", message)
@@ -236,6 +384,39 @@ task.spawn(function()
 				return
 			end
 			local success, message = pcall(function()
+				local effectMatchId, effectArenaId, effectRevision =
+					EffectScope.ReadEffectContext(payload)
+				if
+					not EffectScope.Matches(
+						payload,
+						stringAttribute("MatchId"),
+						stringAttribute("ArenaId"),
+						revisionAttribute(),
+						recentMatchId,
+						recentArenaId,
+						recentMatchRevision
+					)
+				then
+					return
+				end
+				if effectMatchId ~= "" and effectRevision >= recentMatchRevision then
+					recentMatchId = effectMatchId
+					recentArenaId = effectArenaId
+					recentMatchRevision = effectRevision
+				end
+				if typeof(payload) == "table" then
+					local kind = payload.kind or payload.Kind or payload.type or payload.Type
+					if
+						typeof(kind) == "string"
+						and (
+							string.lower(kind) == "result"
+							or string.lower(kind) == "cancelled"
+							or string.lower(kind) == "timeout"
+						)
+					then
+						resetTransientClientState()
+					end
+				end
 				ui:ApplyEffect(payload)
 			end)
 			if not success then
@@ -246,9 +427,12 @@ task.spawn(function()
 
 	inputController = InputController.new(actionRequest, ui)
 	for _, payload in feedbackBeforeInput do
-		inputController:ApplyActionFeedback(payload)
+		if inputController:ApplyActionFeedback(payload) then
+			ui:ApplyActionFeedback(payload)
+		end
 	end
 	table.clear(feedbackBeforeInput)
+	handleMatchContextChanged()
 
 	local success, snapshot = pcall(function()
 		return getSnapshot:InvokeServer()
@@ -257,7 +441,21 @@ task.spawn(function()
 		return
 	end
 	if success and typeof(snapshot) == "table" then
-		ui:ApplyState(snapshot, true)
+		local snapshotMatchId, snapshotArenaId, snapshotRevision =
+			EffectScope.ReadStateContext(snapshot)
+		local envelopeRevision = EffectScope.ReadStateRevision(snapshot)
+		local knownRevision = math.max(revisionAttribute(), recentMatchRevision)
+		local allowMatchState = envelopeRevision >= knownRevision
+		if snapshotMatchId ~= "" and snapshotRevision >= recentMatchRevision then
+			recentMatchId = snapshotMatchId
+			recentArenaId = snapshotArenaId
+			recentMatchRevision = snapshotRevision
+		end
+		local wasGameplayActive = ui:IsGameplayActive()
+		ui:ApplyState(snapshot, true, allowMatchState)
+		if wasGameplayActive and not ui:IsGameplayActive() then
+			resetTransientClientState()
+		end
 	elseif not success then
 		warn("[PannaClient] Initial snapshot failed:", snapshot)
 		ui:ShowNotification("SYNC DELAYED", "Live updates are still connected", nil, 3.5)

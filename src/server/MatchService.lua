@@ -1,7 +1,10 @@
 --!strict
 
 local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+
+local GoalMath = require(ReplicatedStorage:WaitForChild("PannaShared"):WaitForChild("GoalMath"))
 
 local MatchService = {}
 MatchService.__index = MatchService
@@ -17,6 +20,7 @@ type Score = {
 
 type MatchRecord = {
 	Id: string,
+	Revision: number,
 	Arena: any,
 	Home: Player,
 	Away: Player,
@@ -42,7 +46,8 @@ export type Service = typeof(setmetatable(
 		onArenaReleased: ((any, Player, Player) -> ())?,
 		onRematchReady: ((Player, Player, any) -> ())?,
 		goalHeartbeat: RBXScriptConnection?,
-		goalDistances: { [string]: { Home: number?, Away: number? } },
+		goalPositions: { [string]: Vector3? },
+		nextMatchRevision: number,
 	},
 	MatchService
 ))
@@ -89,7 +94,8 @@ function MatchService.new(
 		onArenaReleased = nil,
 		onRematchReady = nil,
 		goalHeartbeat = nil,
-		goalDistances = {},
+		goalPositions = {},
+		nextMatchRevision = 0,
 	}, MatchService)
 
 	self.goalHeartbeat = RunService.Heartbeat:Connect(function()
@@ -103,54 +109,26 @@ function MatchService.new(
 	return self
 end
 
-function MatchService._goalDistance(_self: Service, arena: any, goal: BasePart): (number, Vector3)
-	local outward = Vector3.new(
-		goal.Position.X - arena.Bounds.Position.X,
-		0,
-		goal.Position.Z - arena.Bounds.Position.Z
-	)
-	if outward.Magnitude < 0.01 then
-		outward = Vector3.new(0, 0, 1)
-	else
-		outward = outward.Unit
-	end
-	local linePoint = goal.Position - outward * (goal.Size.Z * 0.5)
-	return (arena.Ball.Position - linePoint):Dot(outward), outward
-end
-
 function MatchService._stepGoal(
 	self: Service,
 	match: MatchRecord,
 	defendedSide: string,
-	goal: BasePart
+	goal: BasePart,
+	previousPosition: Vector3,
+	currentPosition: Vector3
 )
-	local distances = self.goalDistances[match.Id]
-	if not distances then
-		distances = { Home = nil, Away = nil }
-		self.goalDistances[match.Id] = distances
-	end
-
-	local distance, outward = self:_goalDistance(match.Arena, goal)
-	local previous = if defendedSide == "Home" then distances.Home else distances.Away
-	if defendedSide == "Home" then
-		distances.Home = distance
-	else
-		distances.Away = distance
-	end
-
-	if previous == nil or match.GoalDebounce then
+	if match.GoalDebounce then
 		return
 	end
 
 	local ball = match.Arena.Ball
-	local radius = math.max(self.config.Ball.Radius, ball.Size.X * 0.5)
-	local localBall = goal.CFrame:PointToObjectSpace(ball.Position)
-	local withinPosts = math.abs(localBall.X) + radius <= goal.Size.X * 0.5
-	local belowCrossbar = localBall.Y + radius <= goal.Size.Y * 0.5
-	local aboveFloor = localBall.Y - radius >= -goal.Size.Y * 0.5
-	local crossedFully = previous < radius and distance >= radius
-	local movingOutward = ball.AssemblyLinearVelocity:Dot(outward) > 0.25 or distance > previous
-	if withinPosts and belowCrossbar and aboveFloor and crossedFully and movingOutward then
+	local radius =
+		math.max(self.config.Ball.Radius, ball.Size.X * 0.5, ball.Size.Y * 0.5, ball.Size.Z * 0.5)
+	local geometry = GoalMath.CreateGeometry(goal.CFrame, goal.Size, match.Arena.Bounds.Position)
+	if
+		geometry
+		and GoalMath.DidSphereFullyCross(previousPosition, currentPosition, radius, geometry)
+	then
 		self:_onGoalCrossed(match.Arena, defendedSide)
 	end
 end
@@ -163,8 +141,25 @@ function MatchService._stepGoals(self: Service)
 			and now < match.EndsAt
 			and (match.State == "Active" or match.State == "Overtime")
 		then
-			self:_stepGoal(match, "Home", match.Arena.HomeGoal)
-			self:_stepGoal(match, "Away", match.Arena.AwayGoal)
+			local currentPosition = match.Arena.Ball.Position
+			local previousPosition = self.goalPositions[match.Id]
+			self.goalPositions[match.Id] = currentPosition
+			if previousPosition then
+				self:_stepGoal(
+					match,
+					"Home",
+					match.Arena.HomeGoal,
+					previousPosition,
+					currentPosition
+				)
+				self:_stepGoal(
+					match,
+					"Away",
+					match.Arena.AwayGoal,
+					previousPosition,
+					currentPosition
+				)
+			end
 		end
 	end
 end
@@ -199,6 +194,7 @@ end
 function MatchService._snapshot(self: Service, match: MatchRecord): { [string]: any }
 	return {
 		id = match.Id,
+		revision = match.Revision,
 		state = match.State,
 		arenaId = match.Arena.Id,
 		arenaName = self.arenas:GetDisplayName(match.Arena),
@@ -233,9 +229,13 @@ function MatchService._broadcast(self: Service, match: MatchRecord)
 end
 
 function MatchService._effect(self: Service, match: MatchRecord, payload: { [string]: any })
+	local scopedPayload = table.clone(payload)
+	scopedPayload.matchId = match.Id
+	scopedPayload.arenaId = match.Arena.Id
+	scopedPayload.matchRevision = match.Revision
 	for _, player in { match.Home, match.Away } do
 		if player.Parent then
-			self.remotes.Effect:FireClient(player, payload)
+			self.remotes.Effect:FireClient(player, scopedPayload)
 		end
 	end
 end
@@ -259,10 +259,12 @@ function MatchService.StartMatch(
 	if not self.arenas:Reserve(arena, matchId, home, away) then
 		return nil
 	end
+	self.nextMatchRevision += 1
 
 	local now = serverNow()
 	local match: MatchRecord = {
 		Id = matchId,
+		Revision = self.nextMatchRevision,
 		Arena = arena,
 		Home = home,
 		Away = away,
@@ -284,7 +286,7 @@ function MatchService.StartMatch(
 	}
 
 	self.matches[matchId] = match
-	self.goalDistances[matchId] = { Home = nil, Away = nil }
+	self.goalPositions[matchId] = nil
 	self.byPlayer[home] = match
 	self.byPlayer[away] = match
 	for _, player in { home, away } do
@@ -293,6 +295,7 @@ function MatchService.StartMatch(
 		player:SetAttribute("InMatch", true)
 		player:SetAttribute("MatchId", matchId)
 		player:SetAttribute("ArenaId", arena.Id)
+		player:SetAttribute("MatchRevision", match.Revision)
 		player:SetAttribute("SelectedArenaId", arena.Id)
 	end
 
@@ -420,7 +423,7 @@ function MatchService._onGoalCrossed(self: Service, arena: any, defendedSide: st
 	self.ballService:SetActive(match, false)
 	self:_teleportPlayers(match)
 	self.ballService:ResetMatchBall(match)
-	self.goalDistances[match.Id] = { Home = nil, Away = nil }
+	self.goalPositions[match.Id] = nil
 	self:_broadcast(match)
 	task.delay(self.config.Match.GoalResetSeconds, function()
 		if match.Ended then
@@ -499,6 +502,9 @@ function MatchService._finish(
 				else if winner == nil then "DRAW" elseif won then "VICTORY" else "DEFEAT"
 			self.remotes.Effect:FireClient(player, {
 				kind = "Result",
+				matchId = match.Id,
+				arenaId = match.Arena.Id,
+				matchRevision = match.Revision,
 				title = title,
 				text = string.format("%d - %d · %s", match.Score.Home, match.Score.Away, reason),
 				won = won,
@@ -519,6 +525,7 @@ function MatchService._cleanup(self: Service, match: MatchRecord)
 	local wantsRematch = match.RematchVotes[match.Home] and match.RematchVotes[match.Away]
 	self.ballService:DetachMatch(match)
 	self.arenas:Release(match.Arena)
+	self:_setControlsLocked(match, false)
 	for _, player in { match.Home, match.Away } do
 		self.byPlayer[player] = nil
 		if player.Parent then
@@ -527,13 +534,15 @@ function MatchService._cleanup(self: Service, match: MatchRecord)
 			player:SetAttribute("MatchId", "")
 			player:SetAttribute("ArenaId", "")
 			player:SetAttribute("SelectedArenaId", "")
-			player:SetAttribute("ControlsLocked", false)
 			self.arenas:ReturnToStreet(match.Arena, player)
-			self.remotes.StateUpdate:FireClient(player, { match = false })
+			self.remotes.StateUpdate:FireClient(
+				player,
+				{ match = false, matchRevision = match.Revision }
+			)
 		end
 	end
 	self.matches[match.Id] = nil
-	self.goalDistances[match.Id] = nil
+	self.goalPositions[match.Id] = nil
 
 	if wantsRematch and self.onRematchReady and match.Home.Parent and match.Away.Parent then
 		self.onRematchReady(match.Home, match.Away, match.Arena)
@@ -572,6 +581,9 @@ function MatchService.RequestRematch(self: Service, player: Player): boolean
 	if other and other.Parent then
 		self.remotes.Effect:FireClient(other, {
 			kind = "Message",
+			matchId = match.Id,
+			arenaId = match.Arena.Id,
+			matchRevision = match.Revision,
 			title = "REMATCH",
 			text = string.format("%s wants another game.", player.DisplayName),
 		})

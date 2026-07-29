@@ -105,6 +105,7 @@ export type Score = {
 
 export type MatchRecord = {
 	Id: string,
+	Revision: number,
 	Arena: Arena,
 	Home: Player,
 	Away: Player,

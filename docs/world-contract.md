@@ -53,7 +53,7 @@ Workspace
 | Объект | Класс | Назначение |
 | --- | --- | --- |
 | `PannaDistrict` | `Model` | Единственный корень; повторный builder не создаёт второй район |
-| `DistrictEnvironment` | `Model` | Улица, окружение, вечерний свет и дальний ориентир |
+| `DistrictEnvironment` | `Model` | Улица, окружение, светлый дневной стиль и дальний ориентир |
 | `CentralStreet/StreetSurface` | `BasePart` | Непрерывный пешеходный маршрут через весь район |
 | `Lobby` | `Model` | Общая безопасная стартовая зона |
 | `LobbySpawn` | `SpawnLocation` | Первичное появление и запасной возврат |
@@ -70,22 +70,24 @@ Workspace
 - `LayoutVersion = Config.Version`;
 - `RoomStateContract = "Free,Waiting,Countdown,Active,Result"`.
 
-`DistrictEnvironment` имеет `DistrictStyle = "EveningStreetFootball"` и `ExternalAssetCount = 0`; у `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`.
+`DistrictEnvironment` имеет `DistrictStyle = "BrightDayFootballDistrict"` и `ExternalAssetCount = 0`; у `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`.
 
 `QueuePad` и `QueuePrompt` имеют `QueueMode = "1v1"`. UI-кнопка быстрой очереди и prompt должны идти через один серверный путь. Для prompt используются `T` на клавиатуре и `R3` на геймпаде; touch использует стандартное взаимодействие Roblox.
 
 ## Шесть комнат
 
-| ID | `DisplayName` / `RoomTitle` | Сторона | Тема blockout |
-| --- | --- | --- | --- |
-| `Arena_1` | `Concrete Cage` | Left | грубый бетон и клетка |
-| `Arena_2` | `Neon Futsal` | Right | неоновая футзальная площадка |
-| `Arena_3` | `Club House` | Left | клубный уличный двор |
-| `Arena_4` | `Industrial` | Right | трубы и индустриальные опоры |
-| `Arena_5` | `Training Lab` | Left | измерительная тренировочная тема |
-| `Arena_6` | `Championship` | Right | финальная турнирная сцена |
+| ID | `DisplayName` / `RoomTitle` | Сторона | Покрытие | Тема blockout |
+| --- | --- | --- | --- | --- |
+| `Arena_1` | `Concrete Cage` | Left | Concrete | грубый бетон и клетка |
+| `Arena_2` | `Neon Futsal` | Right | SmoothPlastic/futsal | цветная футзальная площадка |
+| `Arena_3` | `Club House` | Left | Grass | клубный футбольный двор |
+| `Arena_4` | `Industrial` | Right | Concrete | трубы и индустриальные опоры |
+| `Arena_5` | `Training Lab` | Left | SmoothPlastic/futsal | измерительная тренировочная тема |
+| `Arena_6` | `Championship` | Right | Grass | финальная турнирная сцена |
 
 Темы оригинальны и выполнены только геометрией, цветом, материалами и встроенным освещением. Декоративные модели можно менять независимо, пока обязательные прямые дети и их смысл сохраняются.
+
+Каждый `Court` имеет `PitchFinish` с чередующимися полосами покрытия и отдельные неколлизионные элементы разметки: `LeftTouchLine`, `RightTouchLine`, `HomeGoalLine`, `AwayGoalLine`, `CenterLine`, `CenterSpot`, сегменты `CenterCircle` и линии штрафных зон. Разметка является визуальной; серверные `Goal`/`Bounds` остаются независимыми невидимыми маркерами.
 
 ### Обязательные прямые дети комнаты
 
@@ -94,10 +96,10 @@ Workspace
 | `HomeSpawn` | `BasePart` | Матчевая позиция Home, ориентирована внутрь поля |
 | `AwaySpawn` | `BasePart` | Матчевая позиция Away, ориентирована внутрь поля |
 | `BallSpawn` | `BasePart` | Центр reset мяча над поверхностью |
-| `HomeGoal` | `BasePart` | Невидимая серверная голевая зона Home |
-| `AwayGoal` | `BasePart` | Невидимая серверная голевая зона Away |
+| `HomeGoal` | `BasePart` | Невидимая геометрия створа/глубины Home; передняя грань задаёт плоскость линии |
+| `AwayGoal` | `BasePart` | Невидимая геометрия створа/глубины Away; передняя грань задаёт плоскость линии |
 | `Bounds` | `BasePart` | Объём sanity-check, изоляции и восстановления мяча |
-| `Ball` | `BasePart` | Единственный физический авторитетный мяч комнаты |
+| `Ball` | `BasePart` | Единственный авторитетный мяч комнаты: kinematic Anchored в `Controlled`, физический server-owned в остальных состояниях |
 | `EntryZone` | `BasePart` | Внешняя зона входа; содержит `EntryPrompt` |
 | `ExitZone` | `BasePart` | Внутренняя зона выхода; содержит `ExitPrompt` |
 | `Barrier` | `BasePart` | Ворота комнаты, открытые в ожидании и закрытые во время матча/результата |
@@ -147,9 +149,11 @@ Free → Waiting → Countdown → Active → Result → Free
 
 ## Геометрия, физика и изоляция
 
-Невидимые маркеры закреплены и не сталкиваются с персонажами/мячом. `Ball` — незакреплённая сфера под network ownership сервера. Видимые стойки, сетка, ограждения, трибуны и theme-модели не должны подменять служебные зоны.
+Невидимые маркеры закреплены и не сталкиваются с персонажами/мячом. `Ball` незакреплён и server-owned во всех физических состояниях, но в `Controlled` временно становится `Anchored`: сервер ставит его перед направлением `HumanoidRootPart`, выравнивает по земле raycast-проверкой, ограничивает путь `Spherecast` и обновляет визуальное качение. Legacy `PannaDribbleForce` существует только как выключенный совместимый runtime-объект. При shot/pass/tackle/reset/loss/death/detach мяч обязательно возвращается в незакреплённый server-owned режим. Видимые стойки, сетка, ограждения, трибуны и theme-модели не должны подменять служебные зоны.
 
 У мяча, участников каждой комнаты и остальных игроков назначены отдельные collision groups. Физические столкновения мяча с персонажами намеренно отключены: касание, владение, shield, tackle и финты определяет авторитетная серверная геометрия, чтобы клиентская физика персонажа не могла напрямую толкать мяч. Мяч при этом сталкивается с площадкой и окружением. Периодический scan занятого `Bounds` возвращает постороннего к `StreetSpawn` даже если регистрация collision groups недоступна. Матрицу столкновений, `CanCollide`, `CanTouch`, `CanQuery` и поведение StreamingEnabled всё равно необходимо проверить в многоклиентном Studio-прогоне.
+
+Для гола `GoalMath` ориентирует локальную ось глубины Goal marker от `Bounds.Position` внутрь соответствующих ворот. Передняя грань — плоскость голевой линии; поле имеет отрицательную signed distance, пространство сетки — положительную. `MatchService` проверяет swept-отрезок предыдущей/текущей позиции и принимает только движение поле → ворота, когда центр прошёл дальше радиуса и сфера целиком помещается в створе. Touch/half crossing, касание стойки/перекладины, проход снаружи и вход с задней стороны не считаются голом; debounce допускает одно начисление на episode.
 
 Дополнительные диагностические атрибуты:
 
@@ -194,9 +198,9 @@ Free → Waiting → Countdown → Active → Result → Free
 
 ## Lighting и производительность
 
-Builder задаёт вечернее освещение и помечает собственные эффекты `PannaDistrictBuilderEffect = true`: `PannaAtmosphere`, `PannaColorGrade` и `PannaNeonBloom`. Чужие эффекты в `Lighting` не удаляются.
+Builder задаёт светлое дневное освещение (`ClockTime = 14.15`) с повышенной читаемостью теней/мяча и помечает собственные эффекты `PannaDistrictBuilderEffect = true`: `PannaAtmosphere`, `PannaColorGrade`, `PannaNeonBloom` и `PannaSunRays`. Bloom и SunRays намеренно умеренные; чужие эффекты в `Lighting` не удаляются.
 
-Геометрия модульная: повторяющиеся элементы группируются в модели, круговая разметка ограничена сегментами, а PointLight не отбрасывают динамические тени. Это снижает стоимость blockout, но не заменяет профилирование всех шести комнат, StreamingEnabled и LOD на слабом устройстве.
+Геометрия модульная: повторяющиеся элементы группируются в модели, полосы покрытия и круговая разметка имеют фиксированное число сегментов, а PointLight не отбрасывают динамические тени. Это снижает стоимость blockout, но не заменяет профилирование всех шести комнат, StreamingEnabled, дневных post-effects и LOD на слабом устройстве. Текущий арт/lighting-проход запечён с `PANNA_BAKE_OK` и прошёл структурный Studio smoke; screenshot-review не выполнен, потому что `StudioCaptureService` недоступен в headless `RunScript`.
 
 ## Ручная арт-карта
 

@@ -24,7 +24,7 @@ local arenas = ArenaService.new(world, Config)
 local dataService = PlayerDataService.new(Config, remotes)
 local ballService = BallService.new(Config, arenas)
 local matchService = MatchService.new(Config, arenas, ballService, dataService, remotes)
-local queueService = QueueService.new(Config, arenas, matchService, remotes)
+local queueService = QueueService.new(arenas, matchService, remotes)
 local roomService = RoomService.new(Config, arenas, matchService, queueService, remotes)
 
 matchService:SetArenaReleasedCallback(function(_arena: any, home: Player, away: Player)
@@ -120,6 +120,7 @@ local function initializePlayer(player: Player)
 	player:SetAttribute("InMatch", false)
 	player:SetAttribute("MatchId", "")
 	player:SetAttribute("ArenaId", "")
+	player:SetAttribute("MatchRevision", 0)
 	player:SetAttribute("SelectedArenaId", "")
 	player:SetAttribute("ControlsLocked", false)
 	player:SetAttribute("DataLoaded", false)
@@ -174,6 +175,7 @@ remotes.GetSnapshot.OnServerInvoke = function(player: Player): { [string]: any }
 		version = Config.Version,
 		queue = queueService:GetSnapshot(player),
 		match = matchService:GetSnapshot(player),
+		matchRevision = player:GetAttribute("MatchRevision") or 0,
 		stats = dataService:GetPublicStats(player),
 		serverNow = workspace:GetServerTimeNow(),
 	}

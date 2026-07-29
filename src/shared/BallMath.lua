@@ -62,4 +62,47 @@ function BallMath.ClosestPointOnRay(
 	return origin + unitDirection * along, along
 end
 
+function BallMath.KinematicControlTarget(
+	rootCFrame: CFrame,
+	groundPoint: Vector3,
+	direction: Vector3,
+	distance: number,
+	lateralOffset: number,
+	radius: number,
+	heightOffset: number
+): Vector3?
+	local forward = BallMath.HorizontalUnit(direction, rootCFrame.LookVector)
+	if not forward or not BallMath.IsFiniteVector3(groundPoint) then
+		return nil
+	end
+	local right = forward:Cross(Vector3.yAxis)
+	local horizontal = rootCFrame.Position + forward * math.max(0, distance) + right * lateralOffset
+	return Vector3.new(
+		horizontal.X,
+		groundPoint.Y + math.max(0.05, radius) + math.max(0, heightOffset),
+		horizontal.Z
+	)
+end
+
+function BallMath.KinematicRollCFrame(
+	currentCFrame: CFrame,
+	targetPosition: Vector3,
+	radius: number,
+	rotationMultiplier: number,
+	maximumRadians: number
+): CFrame
+	local travel = targetPosition - currentCFrame.Position
+	local horizontalTravel = Vector3.new(travel.X, 0, travel.Z)
+	local rotation = currentCFrame.Rotation
+	if horizontalTravel.Magnitude >= 1e-4 then
+		local axis = Vector3.new(0, 1, 0):Cross(horizontalTravel.Unit)
+		local angle = math.min(
+			horizontalTravel.Magnitude / math.max(0.05, radius) * math.max(0, rotationMultiplier),
+			math.max(0, maximumRadians)
+		)
+		rotation = CFrame.fromAxisAngle(axis, angle) * rotation
+	end
+	return CFrame.new(targetPosition) * rotation
+end
+
 return table.freeze(BallMath)

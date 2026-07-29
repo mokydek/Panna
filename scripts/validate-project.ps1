@@ -411,6 +411,7 @@ $requiredPaths = @(
     'src/server/BallService.lua',
     'src/server/PannaDetector.lua',
     'src/client/init.client.lua',
+    'src/client/EffectScope.lua',
     'src/client/UIController.lua',
     'src/client/InputController.lua',
     'src/world/PannaDistrict.model.json',
