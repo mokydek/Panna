@@ -10,13 +10,17 @@ local LOCAL_PLAYER = Players.LocalPlayer
 
 local ACTION_ORDER = table.freeze({ "Kick", "Pass", "Feint", "Skill", "Tackle", "Shield", "Dash" })
 local ACTION_PRESENTATION = table.freeze({
-	Kick = table.freeze({ title = "SHOT", keyboard = "LMB / E", gamepad = "R2" }),
-	Pass = table.freeze({ title = "PASS", keyboard = "Q", gamepad = "X" }),
+	Kick = table.freeze({
+		title = "SHOT · NORMAL",
+		keyboard = "LMB · Z MODE",
+		gamepad = "R2 · ↑ MODE",
+	}),
+	Pass = table.freeze({ title = "PASS · HOLD", keyboard = "Q", gamepad = "X" }),
 	Feint = table.freeze({ title = "FEINT", keyboard = "V", gamepad = "R1" }),
 	Tackle = table.freeze({ title = "TACKLE", keyboard = "F", gamepad = "B" }),
 	Skill = table.freeze({ title = "PANNA", keyboard = "R", gamepad = "Y" }),
 	Shield = table.freeze({ title = "SHIELD", keyboard = "HOLD C", gamepad = "HOLD L2" }),
-	Dash = table.freeze({ title = "DASH", keyboard = "SHIFT", gamepad = "L1" }),
+	Dash = table.freeze({ title = "DASH", keyboard = "X", gamepad = "L1" }),
 })
 
 local COLORS = table.freeze({
@@ -165,6 +169,16 @@ local function readableArena(value: string): string
 	return string.upper(string.gsub(value, "_", " "))
 end
 
+local function preferredInputIsTouch(): boolean
+	local success, preferred = pcall(function(): any
+		return UserInputService.PreferredInput
+	end)
+	if success and typeof(preferred) == "EnumItem" then
+		return preferred.Name == "Touch"
+	end
+	return UserInputService:GetLastInputType() == Enum.UserInputType.Touch
+end
+
 local function readArenaState(source: any): (string, string, number, number, string)
 	local nested = read(source, "arena", "Arena", "selectedArena", "SelectedArena", "room", "Room")
 	local arenaSource = if typeof(nested) == "table" then nested else source
@@ -236,9 +250,12 @@ type ControllerFields = {
 	Timer: TextLabel,
 	PowerContainer: Frame,
 	PowerFill: Frame,
+	PowerCaption: TextLabel,
 	PowerValue: TextLabel,
+	BallStatus: TextLabel,
 	ActionBar: Frame,
 	ActionWidgets: { [string]: any },
+	ActionFeedbackLabel: TextLabel,
 	ScreenFlash: Frame,
 	Notification: CanvasGroup,
 	NotificationAccent: Frame,
@@ -261,6 +278,10 @@ type ControllerFields = {
 	_serverDeadline: number?,
 	_notificationToken: number,
 	_notificationTween: Tween?,
+	_actionFeedbackToken: number,
+	_actionFeedbackTween: Tween?,
+	_shotMode: string,
+	_ballStatusKey: string,
 	_flashTween: Tween?,
 	_shakeEndsAt: number,
 	_shakeStrength: number,
@@ -439,6 +460,12 @@ function UIController.new(): UIController
 	local timer = makeLabel(timerPill, "Timer", "0:00", Enum.Font.Code, 18, COLORS.Lime)
 	timer.Size = UDim2.fromScale(1, 1)
 	timer.TextXAlignment = Enum.TextXAlignment.Center
+
+	local ballStatus =
+		makeLabel(matchCard, "BallStatus", "● FREE", Enum.Font.GothamBlack, 9, COLORS.Muted)
+	ballStatus.Position = UDim2.new(0, 18, 1, -27)
+	ballStatus.Size = UDim2.fromOffset(94, 18)
+	ballStatus.TextXAlignment = Enum.TextXAlignment.Left
 
 	local leaveMatchButton = makeButton(matchCard, "LeaveMatchButton", "EXIT")
 	leaveMatchButton.AnchorPoint = Vector2.new(1, 0)
@@ -631,10 +658,25 @@ function UIController.new(): UIController
 		actionWidgets[action] = {
 			Container = chip,
 			Fill = cooldownFill,
+			Title = title,
 			Binding = key,
 			Cooldown = cooldown,
+			Pending = false,
 		}
 	end
+
+	local actionFeedbackLabel =
+		makeLabel(gui, "ActionFeedback", "", Enum.Font.GothamBlack, 11, COLORS.Text)
+	actionFeedbackLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+	actionFeedbackLabel.BackgroundColor3 = COLORS.Panel
+	actionFeedbackLabel.BackgroundTransparency = 0.14
+	actionFeedbackLabel.Position = UDim2.fromScale(0.5, 0.64)
+	actionFeedbackLabel.Size = UDim2.fromOffset(260, 28)
+	actionFeedbackLabel.TextTransparency = 1
+	actionFeedbackLabel.Visible = false
+	actionFeedbackLabel.ZIndex = 45
+	addCorner(actionFeedbackLabel, 10)
+	addStroke(actionFeedbackLabel, COLORS.Danger, 0.35)
 
 	local notification = Instance.new("CanvasGroup")
 	notification.Name = "Notification"
@@ -712,9 +754,12 @@ function UIController.new(): UIController
 		Timer = timer,
 		PowerContainer = powerContainer,
 		PowerFill = powerFill,
+		PowerCaption = powerCaption,
 		PowerValue = powerValue,
+		BallStatus = ballStatus,
 		ActionBar = actionBar,
 		ActionWidgets = actionWidgets,
+		ActionFeedbackLabel = actionFeedbackLabel,
 		ScreenFlash = screenFlash,
 		Notification = notification,
 		NotificationAccent = notificationAccent,
@@ -730,13 +775,17 @@ function UIController.new(): UIController
 		_matchVisible = false,
 		_matchState = "",
 		_selectedArena = "",
-		_isTouchLayout = UserInputService.TouchEnabled,
+		_isTouchLayout = preferredInputIsTouch(),
 		_exitArmToken = 0,
 		_exitArmedUntil = 0,
 		_localDeadline = nil,
 		_serverDeadline = nil,
 		_notificationToken = 0,
 		_notificationTween = nil,
+		_actionFeedbackToken = 0,
+		_actionFeedbackTween = nil,
+		_shotMode = "Normal",
+		_ballStatusKey = "",
 		_flashTween = nil,
 		_shakeEndsAt = 0,
 		_shakeStrength = 0,
@@ -882,7 +931,7 @@ function UIController.new(): UIController
 		local height = if camera then camera.ViewportSize.Y else 600
 		local compact = width < 600
 		local short = height < 500
-		local touchLayout = UserInputService.TouchEnabled
+		local touchLayout = preferredInputIsTouch()
 		self._isTouchLayout = touchLayout
 		self.Brand.Visible = not compact
 		stats.Position = if compact then UDim2.fromOffset(8, 0) else UDim2.fromOffset(176, 0)
@@ -944,8 +993,17 @@ function UIController.new(): UIController
 	)
 	table.insert(
 		self._connections,
-		UserInputService.LastInputTypeChanged:Connect(updateInputPrompts)
+		UserInputService.LastInputTypeChanged:Connect(function()
+			updateInputPrompts()
+			updateResponsive()
+		end)
 	)
+	local preferredSignalSuccess, preferredSignal = pcall(function()
+		return UserInputService:GetPropertyChangedSignal("PreferredInput")
+	end)
+	if preferredSignalSuccess then
+		table.insert(self._connections, preferredSignal:Connect(updateResponsive))
+	end
 	table.insert(
 		self._connections,
 		{
@@ -1053,6 +1111,7 @@ function UIController.SetMatchState(self: UIController, match: any)
 		self._serverDeadline = nil
 		self.TopBar.Visible = true
 		self.MatchCard.Visible = false
+		self.BallStatus.Visible = false
 		self.PowerContainer.Visible = false
 		self.ActionBar.Visible = false
 		self.QueueCard.Visible = true
@@ -1103,6 +1162,7 @@ function UIController.SetMatchState(self: UIController, match: any)
 	self._matchVisible = true
 	self._matchState = state
 	self.MatchCard.Visible = true
+	self.BallStatus.Visible = true
 	self.QueueCard.Visible = false
 	local gameplayActive = state == "Active" or state == "Overtime"
 	local camera = Workspace.CurrentCamera
@@ -1114,7 +1174,7 @@ function UIController.SetMatchState(self: UIController, match: any)
 		0,
 		if self._isTouchLayout and gameplayActive then 12 else if compact then 76 else 80
 	)
-	self.PowerContainer.Visible = gameplayActive
+	self.PowerContainer.Visible = false
 	self.ActionBar.Visible = gameplayActive and not self._isTouchLayout
 	self.LeaveMatchButton.Visible = state ~= "Finished"
 	self.LeaveMatchButton.Active = true
@@ -1188,11 +1248,62 @@ function UIController._updateTimer(self: UIController)
 		else COLORS.Lime
 end
 
-function UIController.SetKickPower(self: UIController, power: number, charging: boolean)
+function UIController.SetPowerMeter(
+	self: UIController,
+	action: string,
+	power: number,
+	active: boolean,
+	mode: string?
+)
 	local safePower = math.clamp(power, 0, 1)
 	self.PowerFill.Size = UDim2.fromScale(safePower, 1)
 	self.PowerValue.Text = string.format("%d%%", math.floor(safePower * 100 + 0.5))
-	self.PowerContainer.Visible = self._matchVisible and (charging or self:IsGameplayActive())
+	if action == "Pass" then
+		self.PowerCaption.Text = "PASS POWER"
+	elseif action == "Trap" then
+		self.PowerCaption.Text = "FIRST TOUCH"
+	else
+		self.PowerCaption.Text = "SHOT " .. string.upper(mode or self._shotMode)
+	end
+	self.PowerContainer.Visible = self._matchVisible and self:IsGameplayActive() and active
+end
+
+function UIController.SetKickPower(self: UIController, power: number, charging: boolean)
+	self:SetPowerMeter("Kick", power, charging, self._shotMode)
+end
+
+function UIController.SetShotMode(self: UIController, mode: string)
+	local normalized = if mode == "Low" or mode == "Chip" then mode else "Normal"
+	if self._shotMode == normalized then
+		return
+	end
+	self._shotMode = normalized
+	local widget = self.ActionWidgets.Kick
+	if typeof(widget) == "table" then
+		widget.Title.Text = "SHOT · " .. string.upper(normalized)
+	end
+end
+
+function UIController.SetBallStatus(self: UIController, state: string, ownerUserId: number)
+	local normalized = string.lower(state)
+	local key = normalized .. ":" .. tostring(ownerUserId)
+	if self._ballStatusKey == key then
+		return
+	end
+	self._ballStatusKey = key
+	if ownerUserId == LOCAL_PLAYER.UserId then
+		self.BallStatus.Text = "● CONTROL"
+		self.BallStatus.TextColor3 = COLORS.Lime
+	elseif normalized == "contested" or ownerUserId ~= 0 then
+		self.BallStatus.Text = "● CONTESTED"
+		self.BallStatus.TextColor3 = COLORS.Warning
+	elseif normalized == "flight" or normalized == "shot" or normalized == "bounce" then
+		self.BallStatus.Text = "● FLIGHT"
+		self.BallStatus.TextColor3 = COLORS.Cyan
+	else
+		self.BallStatus.Text = "● FREE"
+		self.BallStatus.TextColor3 = COLORS.Muted
+	end
 end
 
 function UIController.IsGameplayActive(self: UIController): boolean
@@ -1207,7 +1318,7 @@ function UIController.SetActionCooldown(
 	duration: number
 )
 	local widget = self.ActionWidgets[action]
-	if typeof(widget) ~= "table" or widget.Active == true then
+	if typeof(widget) ~= "table" or widget.Active == true or widget.Pending == true then
 		return
 	end
 
@@ -1217,6 +1328,24 @@ function UIController.SetActionCooldown(
 	widget.Binding.Visible = safeRemaining <= 0.04
 	widget.Cooldown.Text = if safeRemaining > 0.04 then string.format("%.1f", safeRemaining) else ""
 	widget.Cooldown.TextColor3 = COLORS.Warning
+end
+
+function UIController.SetActionPending(self: UIController, action: string, pending: boolean)
+	local widget = self.ActionWidgets[action]
+	if typeof(widget) ~= "table" then
+		return
+	end
+	widget.Pending = pending
+	if widget.Active == true then
+		return
+	end
+	widget.Container.BackgroundColor3 = if pending then COLORS.PanelLight else COLORS.Panel
+	widget.Binding.Visible = not pending
+	widget.Cooldown.Text = if pending then "…" else ""
+	widget.Cooldown.TextColor3 = COLORS.Muted
+	if pending then
+		widget.Fill.Size = UDim2.fromScale(1, 0)
+	end
 end
 
 function UIController.SetActionActive(self: UIController, action: string, active: boolean)
@@ -1231,6 +1360,134 @@ function UIController.SetActionActive(self: UIController, action: string, active
 	widget.Cooldown.TextColor3 = if active then COLORS.Background else COLORS.Warning
 	widget.Binding.Visible = not active
 	widget.Fill.Size = UDim2.fromScale(1, 0)
+end
+
+function UIController._showActionFeedback(self: UIController, text: string, color: Color3)
+	self._actionFeedbackToken += 1
+	local token = self._actionFeedbackToken
+	if self._actionFeedbackTween then
+		self._actionFeedbackTween:Cancel()
+		self._actionFeedbackTween = nil
+	end
+
+	local label = self.ActionFeedbackLabel
+	label.Text = text
+	label.TextColor3 = color
+	label.TextTransparency = 0
+	label.BackgroundTransparency = 0.14
+	label.Visible = true
+	local stroke = label:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Color = color
+	end
+
+	task.delay(0.62, function()
+		if self._destroyed or token ~= self._actionFeedbackToken then
+			return
+		end
+		local tween = TweenService:Create(
+			label,
+			TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ TextTransparency = 1, BackgroundTransparency = 1 }
+		)
+		self._actionFeedbackTween = tween
+		tween:Play()
+		tween.Completed:Once(function()
+			if not self._destroyed and token == self._actionFeedbackToken then
+				label.Visible = false
+				self._actionFeedbackTween = nil
+			end
+		end)
+	end)
+end
+
+function UIController.ApplyActionFeedback(self: UIController, feedback: any)
+	if self._destroyed or typeof(feedback) ~= "table" then
+		return
+	end
+	local action = readString(feedback, "", "action", "Action")
+	local accepted = readBoolean(feedback, false, "accepted", "Accepted")
+	local executed = readBoolean(feedback, false, "executed", "Executed")
+	local mode = readString(feedback, "", "mode", "Mode")
+	local reason = readString(feedback, "Rejected", "reason", "Reason")
+	if accepted then
+		if action == "ChargeStart" then
+			return
+		end
+		if not executed then
+			if reason == "Buffered" then
+				local bufferedMessages: { [string]: string } = {
+					Kick = "SHOT BUFFERED",
+					Pass = "PASS BUFFERED",
+					Trap = "FIRST TOUCH READY",
+				}
+				local message = bufferedMessages[action]
+				if message then
+					self:_showActionFeedback(message, COLORS.Lime)
+				end
+			end
+			return
+		end
+		if action == "Kick" then
+			local shotMode = if mode == "Low"
+					or mode == "Normal"
+					or mode == "Chip"
+				then mode
+				else self._shotMode
+			local strength = if shotMode == "Low"
+				then 0.55
+				else if shotMode == "Chip" then 0.7 else 0.82
+			self:PlayImpact("Kick", strength)
+		elseif action == "Pass" then
+			self:PlayImpact("Pass", 0.4)
+		elseif action == "Tackle" then
+			self:PlayImpact("Tackle", 0.55)
+		elseif action == "Feint" or action == "Skill" then
+			self:PlayImpact("Skill", 0.35)
+		elseif action == "Trap" then
+			self:_showActionFeedback("FIRST TOUCH READY", COLORS.Lime)
+		end
+		return
+	end
+
+	local messages: { [string]: string } = {
+		RateLimited = "SLOW DOWN",
+		Cooldown = "ACTION ON COOLDOWN",
+		FeedbackTimeout = "WAITING FOR SERVER",
+		StaleBall = "BALL CHANGED — TRY AGAIN",
+		StaleRevision = "BALL CHANGED — TRY AGAIN",
+		NotController = "NO BALL CONTROL",
+		NotOwner = "NO BALL CONTROL",
+		TooFar = "GET CLOSER TO THE BALL",
+		InvalidState = "ACTION NOT AVAILABLE",
+		ControlsLocked = "WAIT FOR THE WHISTLE",
+		NoMatch = "MATCH IS NOT ACTIVE",
+		NoActiveMatch = "MATCH IS NOT ACTIVE",
+		RevisionMismatch = "BALL CHANGED - TRY AGAIN",
+		MissingCharge = "CHARGE THE BALL FIRST",
+		NoContact = "GET CLOSER TO THE BALL",
+		InvalidFeint = "CHOOSE ANOTHER FEINT",
+		CannotBuffer = "CANNOT READY THAT TOUCH",
+		NoTarget = "NO OPPONENT IN RANGE",
+		BehindDefender = "ATTACK FROM THE FRONT",
+		Shielded = "OPPONENT IS SHIELDING",
+		AimRejected = "FACE YOUR TARGET",
+		MatchMismatch = "MATCH CHANGED - TRY AGAIN",
+		ArenaMismatch = "ARENA CHANGED - TRY AGAIN",
+		StaleClientTime = "CONNECTION DELAY - TRY AGAIN",
+		CharacterUnavailable = "CHARACTER NOT READY",
+		MovementRejected = "MOVEMENT NOT VALID",
+		InvalidDirection = "AIM AGAIN",
+		InvalidChargeAction = "CHARGE CANCELLED",
+		InvalidPayload = "REQUEST INVALID",
+		InvalidSequence = "REQUEST OUT OF ORDER",
+		StaleSequence = "REQUEST OUT OF ORDER",
+		SequenceJump = "REQUEST OUT OF ORDER",
+	}
+	local readableReason = string.gsub(reason, "(%l)(%u)", "%1 %2")
+	readableReason = string.gsub(readableReason, "_", " ")
+	local message = messages[reason] or string.upper(readableReason)
+	self:_showActionFeedback(message, COLORS.Danger)
 end
 
 function UIController._restoreCameraOffset(self: UIController)
@@ -1524,6 +1781,11 @@ function UIController.Destroy(self: UIController)
 	if self._flashTween then
 		self._flashTween:Cancel()
 		self._flashTween = nil
+	end
+	self._actionFeedbackToken += 1
+	if self._actionFeedbackTween then
+		self._actionFeedbackTween:Cancel()
+		self._actionFeedbackTween = nil
 	end
 	self:_restoreCameraOffset()
 	for _, connection in self._connections do

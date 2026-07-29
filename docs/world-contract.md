@@ -149,7 +149,7 @@ Free → Waiting → Countdown → Active → Result → Free
 
 Невидимые маркеры закреплены и не сталкиваются с персонажами/мячом. `Ball` — незакреплённая сфера под network ownership сервера. Видимые стойки, сетка, ограждения, трибуны и theme-модели не должны подменять служебные зоны.
 
-У мяча и двух участников каждой комнаты собственные collision groups; остальные игроки относятся к spectator-группе. Периодический scan занятого `Bounds` возвращает постороннего к `StreetSpawn` даже если регистрация collision groups недоступна. Матрицу столкновений, `CanCollide`, `CanTouch`, `CanQuery` и поведение StreamingEnabled всё равно необходимо проверить в многоклиентном Studio-прогоне.
+У мяча, участников каждой комнаты и остальных игроков назначены отдельные collision groups. Физические столкновения мяча с персонажами намеренно отключены: касание, владение, shield, tackle и финты определяет авторитетная серверная геометрия, чтобы клиентская физика персонажа не могла напрямую толкать мяч. Мяч при этом сталкивается с площадкой и окружением. Периодический scan занятого `Bounds` возвращает постороннего к `StreetSpawn` даже если регистрация collision groups недоступна. Матрицу столкновений, `CanCollide`, `CanTouch`, `CanQuery` и поведение StreamingEnabled всё равно необходимо проверить в многоклиентном Studio-прогоне.
 
 Дополнительные диагностические атрибуты:
 
@@ -184,7 +184,7 @@ Free → Waiting → Countdown → Active → Result → Free
 Геометрические параметры находятся в `Config.World`. После изменения позиций, размеров или числа комнат:
 
 1. сохраните минимум шесть уникальных `ArenaPositions` и при несовместимом layout увеличьте `Config.Version`;
-2. выполните `./scripts/bake-editable-place.ps1`, чтобы чистый `source.project.json` обновил `src/world/PannaDistrict.model.json` и основной place;
+2. выполните `./scripts/bake-editable-place.ps1`: внутренний build-профиль `source.project.json` обновит `src/world/PannaDistrict.model.json`, после чего canonical `default.project.json` соберёт основной release place;
 3. проверьте diff запечённой модели и непрерывность `CentralStreet` до всех трёх рядов;
 4. проверьте `EntryZone`, waiting spawn, `Barrier`, `StreetSpawn` и spectator-трибуну каждой комнаты;
 5. проверьте обе голевые зоны, `Bounds`, reset и возврат мяча;

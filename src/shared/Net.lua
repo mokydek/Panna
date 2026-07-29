@@ -4,6 +4,7 @@ local Net = {
 	FolderName = "PannaRemotes",
 	Events = table.freeze({
 		ActionRequest = "ActionRequest",
+		ActionFeedback = "ActionFeedback",
 		QueueRequest = "QueueRequest",
 		StateUpdate = "StateUpdate",
 		Effect = "Effect",

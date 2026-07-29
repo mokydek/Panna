@@ -396,6 +396,7 @@ $requiredPaths = @(
     'docs/known-limitations.md',
     'docs/roadmap.md',
     'src/shared/Config.lua',
+    'src/shared/BallMath.lua',
     'src/shared/Net.lua',
     'src/shared/Types.lua',
     'src/server/init.server.lua',
@@ -440,6 +441,29 @@ $projectSpecifications = @(
     @{ Path = 'multiplayer.project.json'; DataModelRoot = $true },
     @{ Path = 'world.project.json'; DataModelRoot = $false }
 )
+
+$allowedProjectPaths = @(
+    $projectSpecifications | ForEach-Object { ([string] $_.Path).Replace('\', '/') }
+)
+$projectManifestFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.project.json' | Where-Object {
+    $relative = (Get-RelativeProjectPath -FullName $_.FullName).Replace('\', '/')
+    -not $relative.StartsWith('.git/', [StringComparison]::OrdinalIgnoreCase) -and
+    -not $relative.StartsWith('build/', [StringComparison]::OrdinalIgnoreCase)
+})
+$unexpectedProjectPaths = @()
+foreach ($projectManifestFile in $projectManifestFiles) {
+    $relative = (Get-RelativeProjectPath -FullName $projectManifestFile.FullName).Replace('\', '/')
+    if ($allowedProjectPaths -notcontains $relative) {
+        $unexpectedProjectPaths += $relative
+        Add-Failure "Unexpected Rojo project manifest: $relative. Panna keeps exactly four allowed internal build/test profiles; default.project.json is the canonical release project."
+    }
+}
+if ($projectManifestFiles.Count -ne $allowedProjectPaths.Count) {
+    Add-Failure "Expected exactly $($allowedProjectPaths.Count) Rojo project manifests outside build, found $($projectManifestFiles.Count)."
+}
+elseif ($unexpectedProjectPaths.Count -eq 0) {
+    Add-Pass 'Exactly four allowed internal Rojo profiles exist outside build; default.project.json is the canonical release project.'
+}
 
 foreach ($projectSpecification in $projectSpecifications) {
     $projectPath = [string] $projectSpecification.Path
@@ -521,8 +545,9 @@ if ($assetReferences -eq 0) {
 }
 
 $robloxArtifacts = @(Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object {
-    $relative = Get-RelativeProjectPath -FullName $_.FullName
-    -not $relative.StartsWith('.git' + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
+    $relative = (Get-RelativeProjectPath -FullName $_.FullName).Replace('\', '/')
+    -not $relative.StartsWith('.git/', [StringComparison]::OrdinalIgnoreCase) -and
+    -not $relative.StartsWith('build/', [StringComparison]::OrdinalIgnoreCase) -and
     $_.Extension.ToLowerInvariant() -in @('.rbxl', '.rbxlx', '.rbxm', '.rbxmx')
 })
 foreach ($artifact in $robloxArtifacts) {

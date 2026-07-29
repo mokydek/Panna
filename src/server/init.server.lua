@@ -40,6 +40,76 @@ end)
 
 local initializedPlayers: { [Player]: boolean } = {}
 
+local function requestString(payload: any, key: string): string
+	if typeof(payload) == "table" and typeof(payload[key]) == "string" then
+		return payload[key]
+	end
+	return ""
+end
+
+local function requestNumber(payload: any, key: string): number
+	if typeof(payload) == "table" and typeof(payload[key]) == "number" then
+		local value = payload[key]
+		if value == value and value > -1e9 and value < 1e9 then
+			return value
+		end
+	end
+	return 0
+end
+
+local function requestMode(payload: any): string
+	for _, key in { "shotType", "variant", "chargeAction" } do
+		local value = requestString(payload, key)
+		if value ~= "" then
+			return value
+		end
+	end
+	return ""
+end
+
+local function sendActionFeedback(player: Player, payload: any, result: any)
+	local resultTable = if typeof(result) == "table" then result else nil
+	local accepted = if resultTable then resultTable.accepted == true else result == true
+	local executed = if resultTable then resultTable.executed == true else accepted
+	local reason = if resultTable and typeof(resultTable.reason) == "string"
+		then resultTable.reason
+		else if accepted then "Accepted" else "Rejected"
+	local action = if resultTable and typeof(resultTable.action) == "string"
+		then resultTable.action
+		else requestString(payload, "action")
+	local sequence = if resultTable and typeof(resultTable.sequence) == "number"
+		then resultTable.sequence
+		else requestNumber(payload, "sequence")
+	local cooldownSeconds = if resultTable
+			and typeof(resultTable.cooldownSeconds) == "number"
+		then math.max(0, resultTable.cooldownSeconds)
+		else 0
+	local revision = if resultTable and typeof(resultTable.revision) == "number"
+		then math.max(0, resultTable.revision)
+		else requestNumber(payload, "ballRevision")
+	local controllerUserId = if resultTable
+			and typeof(resultTable.controllerUserId) == "number"
+		then resultTable.controllerUserId
+		else 0
+	local mode = requestMode(payload)
+	local ballState = if resultTable and typeof(resultTable.mode) == "string"
+		then resultTable.mode
+		else ""
+
+	remotes.ActionFeedback:FireClient(player, {
+		accepted = accepted,
+		executed = executed,
+		reason = reason,
+		action = action,
+		sequence = sequence,
+		cooldownSeconds = cooldownSeconds,
+		revision = revision,
+		controllerUserId = controllerUserId,
+		mode = mode,
+		ballState = ballState,
+	})
+end
+
 local function initializePlayer(player: Player)
 	if initializedPlayers[player] then
 		return
@@ -70,9 +140,15 @@ end
 
 remotes.ActionRequest.OnServerEvent:Connect(function(player: Player, payload: any)
 	if not limiter:Allow(player, "Action", 1) then
+		sendActionFeedback(player, payload, {
+			accepted = false,
+			executed = false,
+			reason = "RateLimited",
+		})
 		return
 	end
-	ballService:HandleAction(player, payload)
+	local result = ballService:HandleAction(player, payload)
+	sendActionFeedback(player, payload, result)
 end)
 
 remotes.QueueRequest.OnServerEvent:Connect(function(player: Player, request: any)

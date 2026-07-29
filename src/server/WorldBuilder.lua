@@ -21,6 +21,11 @@ type BallSettings = {
 	Density: number,
 	Friction: number,
 	Elasticity: number,
+	Trail: {
+		Lifetime: number,
+		WidthStart: number,
+		WidthEnd: number,
+	},
 }
 
 type Config = {
@@ -340,6 +345,48 @@ local function createBall(
 	ball.CustomPhysicalProperties =
 		PhysicalProperties.new(settings.Density, settings.Friction, settings.Elasticity, 1, 1)
 	ball:SetAttribute("OwnerUserId", 0)
+	ball:SetAttribute("LastTouchUserId", 0)
+	ball:SetAttribute("BallState", "Reset")
+	ball:SetAttribute("BallRevision", 0)
+	ball:SetAttribute("LastAction", "Reset")
+
+	local controlAttachment = Instance.new("Attachment")
+	controlAttachment.Name = "PannaControlAttachment"
+	controlAttachment.Parent = ball
+
+	local trailTop = Instance.new("Attachment")
+	trailTop.Name = "PannaTrailTop"
+	trailTop.Position = Vector3.new(0, settings.Radius * 0.55, 0)
+	trailTop.Parent = ball
+
+	local trailBottom = Instance.new("Attachment")
+	trailBottom.Name = "PannaTrailBottom"
+	trailBottom.Position = Vector3.new(0, -settings.Radius * 0.55, 0)
+	trailBottom.Parent = ball
+
+	local trail = Instance.new("Trail")
+	trail.Name = "PannaSpeedTrail"
+	trail.Attachment0 = trailTop
+	trail.Attachment1 = trailBottom
+	trail.Enabled = false
+	trail.FaceCamera = true
+	trail.LightEmission = 0.8
+	trail.Lifetime = settings.Trail.Lifetime
+	trail.MinLength = 0.08
+	trail.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.White),
+		ColorSequenceKeypoint.new(0.35, COLORS.Cyan),
+		ColorSequenceKeypoint.new(1, COLORS.Pink),
+	})
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.12),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.WidthScale = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, settings.Trail.WidthStart),
+		NumberSequenceKeypoint.new(1, settings.Trail.WidthEnd),
+	})
+	trail.Parent = ball
 	if arenaId then
 		ball:SetAttribute("ArenaId", arenaId)
 	end

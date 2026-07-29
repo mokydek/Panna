@@ -8,6 +8,7 @@ RemoteRegistry.__index = RemoteRegistry
 export type Registry = {
 	Folder: Folder,
 	ActionRequest: RemoteEvent,
+	ActionFeedback: RemoteEvent,
 	QueueRequest: RemoteEvent,
 	StateUpdate: RemoteEvent,
 	Effect: RemoteEvent,
@@ -32,6 +33,7 @@ function RemoteRegistry.Create(net: any): Registry
 	local registry = {
 		Folder = folder,
 		ActionRequest = getOrCreate(folder, "RemoteEvent", net.Events.ActionRequest) :: RemoteEvent,
+		ActionFeedback = getOrCreate(folder, "RemoteEvent", net.Events.ActionFeedback) :: RemoteEvent,
 		QueueRequest = getOrCreate(folder, "RemoteEvent", net.Events.QueueRequest) :: RemoteEvent,
 		StateUpdate = getOrCreate(folder, "RemoteEvent", net.Events.StateUpdate) :: RemoteEvent,
 		Effect = getOrCreate(folder, "RemoteEvent", net.Events.Effect) :: RemoteEvent,

@@ -25,7 +25,7 @@ Workspace
 └── PannaDistrict           ← запечённая Rojo-модель; сервер проверяет/инициализирует её
 ```
 
-`default.project.json` подключает `src/world/PannaDistrict.model.json`, поэтому карта доступна в Edit Mode. `source.project.json` намеренно не подключает модель: bake-процесс запускает `WorldBuilder` в чистом place, экспортирует результат и затем собирает основной проект. `world.project.json` описывает только корень района для отдельной проверки/экспорта. `multiplayer.project.json` повторяет основной runtime mapping и добавляет тестовые server/client-скрипты из `tests/`; в релизный place они не попадают.
+`default.project.json` подключает `src/world/PannaDistrict.model.json`, поэтому карта доступна в Edit Mode. Это единственный release-manifest и источник единственного пользовательского place. `source.project.json` намеренно не подключает модель: bake-процесс запускает `WorldBuilder` в чистом place, экспортирует результат и затем собирает основной проект. `world.project.json` описывает только корень района для отдельной проверки/экспорта. `multiplayer.project.json` повторяет основной runtime mapping и добавляет тестовые server/client-скрипты из `tests/`; в релизный place они не попадают. Эти три файла — внутренние профили одного проекта, а не отдельные Roblox-игры; валидатор запрещает появление дополнительных `*.project.json`.
 
 Общие модули доступны обеим сторонам, но не должны содержать серверные секреты или давать клиенту право менять результат.
 
@@ -56,7 +56,8 @@ Workspace
 
 | Имя | Направление | Назначение |
 | --- | --- | --- |
-| `ActionRequest` | клиент → сервер | Запрос удара, паса, отбора, финта/панны или рывка |
+| `ActionRequest` | клиент → сервер | Намерение начать заряд, ударить, отдать пас, принять мяч, выполнить отбор, финт, защиту, панну или рывок |
+| `ActionFeedback` | сервер → клиент | Подтверждение или отказ для конкретного `sequence`, фактический cooldown, revision и контекст действия |
 | `QueueRequest` | клиент → сервер | Вход/выход из очереди и поддерживаемые действия после матча |
 | `StateUpdate` | сервер → клиент | Авторитетный снимок очереди, матча, счёта и времени |
 | `Effect` | сервер → клиент | Кратковременный визуальный/текстовый эффект; не источник истины |
@@ -72,12 +73,29 @@ Workspace
 
 ```lua
 {
-    action = "Kick" | "Pass" | "Tackle" | "Skill" | "Dash",
-    direction = planarDirection, -- Vector3; сервер валидирует и нормализует
-    power = 0.0,                 -- только Kick, диапазон 0...1
-    clientTime = serverTimeNow,  -- диагностическая метка, не источник таймера
+    action = "ChargeStart" | "Kick" | "Pass" | "Trap" | "Tackle"
+        | "Feint" | "Shield" | "Skill" | "Dash",
+    sequence = 42,               -- строго возрастает внутри клиентской сессии
+    arenaId = "Arena_1",
+    matchId = "server-match-id",
+    ballRevision = 17,           -- последняя подтверждённая версия состояния мяча
+    clientTime = workspace:GetServerTimeNow(),
+    direction = planarDirection, -- единичный Vector3; не нужен для ChargeStart/ShieldOff
+    moveDirection = moveDirection,
+
+    chargeAction = "Kick" | "Pass",         -- только ChargeStart
+    shotType = "Normal" | "Low" | "Chip", -- только Kick
+    variant = "StepOver" | "Cut" | "DragBack" | "Roulette", -- только Feint
+    lateral = 0.0,               -- только Feint, диапазон -1...1
+    active = true,               -- только Shield
 }
 ```
+
+Клиентская `power` может использоваться только для локального отображения шкалы. Фактическую силу удара/паса сервер вычисляет по времени между принятым `ChargeStart` и отпусканием. До исполнения проверяются активный матч, `sequence`, `arenaId`, `matchId`, revision, время, живой персонаж, история движения, контакт, направление, владение и cooldown.
+
+`ActionFeedback` содержит `accepted`, `executed`, `reason`, `action`, исходный `sequence`, `cooldownSeconds`, актуальный `revision`, `controllerUserId`, подрежим действия (`mode`, например `Chip`) и физическое состояние (`ballState`). `accepted = true, executed = false, reason = "Buffered"` означает разрешённый буфер первого касания, а не ошибку. Клиент запускает cooldown только после этого серверного ответа.
+
+Каждый мяч реплицирует дискретные атрибуты `BallState`, `BallRevision`, `OwnerUserId`, `LastTouchUserId` и `LastAction`. Допустимые состояния: `Free`, `Controlled`, `Contested`, `Shot`, `Flight`, `Bounce`, `Reset`. Непрерывная физика реплицируется самим Roblox; отдельный Remote-поток позиций мяча не используется.
 
 Снимок `GetSnapshot` и частичные `StateUpdate` используют три верхнеуровневые области:
 
@@ -106,7 +124,8 @@ sequenceDiagram
     M-->>C1: StateUpdate (countdown)
     M-->>C2: StateUpdate (countdown)
     C1->>B: ActionRequest (намерение)
-    B->>B: лимит + состояние + дистанция + история движения + направление
+    B->>B: sequence + revision + лимит + состояние + контакт + движение + направление
+    B-->>C1: ActionFeedback (accepted/executed/reason/revision)
     B-->>M: подтверждённое событие мяча/гол
     M-->>C1: StateUpdate (счёт/результат)
     M-->>C2: StateUpdate (счёт/результат)

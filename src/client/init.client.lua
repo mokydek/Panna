@@ -13,6 +13,7 @@ type NetDefinition = {
 	FolderName: string,
 	Events: {
 		ActionRequest: string,
+		ActionFeedback: string,
 		QueueRequest: string,
 		StateUpdate: string,
 		Effect: string,
@@ -26,6 +27,7 @@ local FALLBACK_NET: NetDefinition = {
 	FolderName = "PannaRemotes",
 	Events = {
 		ActionRequest = "ActionRequest",
+		ActionFeedback = "ActionFeedback",
 		QueueRequest = "QueueRequest",
 		StateUpdate = "StateUpdate",
 		Effect = "Effect",
@@ -150,6 +152,8 @@ task.spawn(function()
 	local remoteDeadline = os.clock() + REMOTE_WAIT_SECONDS
 	local actionInstance =
 		waitForRemote(remoteFolder, net.Events.ActionRequest, "RemoteEvent", remoteDeadline)
+	local actionFeedbackInstance =
+		waitForRemote(remoteFolder, net.Events.ActionFeedback, "RemoteEvent", remoteDeadline)
 	local queueInstance =
 		waitForRemote(remoteFolder, net.Events.QueueRequest, "RemoteEvent", remoteDeadline)
 	local stateInstance =
@@ -164,6 +168,7 @@ task.spawn(function()
 	if
 		not (
 			actionInstance
+			and actionFeedbackInstance
 			and queueInstance
 			and stateInstance
 			and effectInstance
@@ -175,6 +180,7 @@ task.spawn(function()
 	end
 
 	local actionRequest = actionInstance :: RemoteEvent
+	local actionFeedback = actionFeedbackInstance :: RemoteEvent
 	local queueRequest = queueInstance :: RemoteEvent
 	local stateUpdate = stateInstance :: RemoteEvent
 	local effect = effectInstance :: RemoteEvent
@@ -186,6 +192,27 @@ task.spawn(function()
 		end
 		queueRequest:FireServer(action)
 	end)
+
+	local feedbackBeforeInput: { any } = {}
+	table.insert(
+		connections,
+		actionFeedback.OnClientEvent:Connect(function(payload: any)
+			if destroyed then
+				return
+			end
+			local success, message = pcall(function()
+				ui:ApplyActionFeedback(payload)
+				if inputController then
+					inputController:ApplyActionFeedback(payload)
+				else
+					table.insert(feedbackBeforeInput, payload)
+				end
+			end)
+			if not success then
+				warn("[PannaClient] Rejected malformed ActionFeedback:", message)
+			end
+		end)
+	)
 
 	table.insert(
 		connections,
@@ -218,6 +245,10 @@ task.spawn(function()
 	)
 
 	inputController = InputController.new(actionRequest, ui)
+	for _, payload in feedbackBeforeInput do
+		inputController:ApplyActionFeedback(payload)
+	end
+	table.clear(feedbackBeforeInput)
 
 	local success, snapshot = pcall(function()
 		return getSnapshot:InvokeServer()
