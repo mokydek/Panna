@@ -19,6 +19,7 @@ type WorldSettings = {
 
 type BallSettings = {
 	Radius: number,
+	VisualVersion: string,
 	Density: number,
 	Friction: number,
 	Elasticity: number,
@@ -53,6 +54,14 @@ local COLORS = table.freeze({
 local LIGHTING_EFFECT_ATTRIBUTE = "PannaDistrictBuilderEffect"
 local ARENA_COUNT = 6
 local PITCH_PHYSICAL_PROPERTIES = PhysicalProperties.new(1, 0.55, 0.05, 100, 100)
+local BALL_PANEL_DIRECTIONS = table.freeze({
+	Vector3.xAxis,
+	-Vector3.xAxis,
+	Vector3.yAxis,
+	-Vector3.yAxis,
+	Vector3.zAxis,
+	-Vector3.zAxis,
+})
 local ROOM_STATES = table.freeze({ "Free", "Waiting", "Countdown", "Active", "Result" })
 local ARENA_ACCENTS = table.freeze({
 	COLORS.Cyan,
@@ -335,6 +344,166 @@ local function createLamp(
 	addPointLight(lamp, color, 34, 0.42)
 end
 
+local function createBallPanel(ball: BasePart, index: number, direction: Vector3, radius: number)
+	local normal = direction.Unit
+	local panelUp = if math.abs(normal:Dot(Vector3.yAxis)) > 0.9
+		then Vector3.zAxis
+		else Vector3.yAxis
+	local panelBack = normal:Cross(panelUp).Unit
+	local thickness = radius * 0.045
+	local diameter = radius * 0.42
+	local localCFrame =
+		CFrame.fromMatrix(normal * (radius + thickness * 0.08), normal, panelUp, panelBack)
+
+	local panel = Instance.new("Part")
+	panel.Name = string.format("PannaBallPanel_%02d", index)
+	panel.Shape = Enum.PartType.Cylinder
+	panel.Size = Vector3.new(thickness, diameter, diameter)
+	panel.CFrame = ball.CFrame * localCFrame
+	panel.Color = COLORS.Black
+	panel.Material = Enum.Material.SmoothPlastic
+	panel.TopSurface = Enum.SurfaceType.Smooth
+	panel.BottomSurface = Enum.SurfaceType.Smooth
+	panel.Anchored = false
+	panel.Massless = true
+	panel.CanCollide = false
+	panel.CanTouch = false
+	panel.CanQuery = false
+	panel.CastShadow = false
+	panel:SetAttribute("BallVisualPanel", true)
+	panel:SetAttribute("PanelIndex", index)
+	panel.Parent = ball
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Name = "PanelWeld"
+	weld.Part0 = ball
+	weld.Part1 = panel
+	weld.Parent = panel
+end
+
+local function clearBallVisual(ball: BasePart)
+	for _, child in ball:GetChildren() do
+		if
+			child:GetAttribute("BallVisualPanel") == true
+			or string.match(child.Name, "^PannaBallPanel_%d+$") ~= nil
+		then
+			child:Destroy()
+		end
+	end
+end
+
+local function createBallVisual(ball: BasePart, settings: BallSettings)
+	clearBallVisual(ball)
+	ball:SetAttribute("BallVisualVersion", settings.VisualVersion)
+	for index, direction in BALL_PANEL_DIRECTIONS do
+		createBallPanel(ball, index, direction, settings.Radius)
+	end
+end
+
+local function hasValidBallVisual(ball: BasePart, settings: BallSettings): boolean
+	if ball:GetAttribute("BallVisualVersion") ~= settings.VisualVersion then
+		return false
+	end
+	local panelCount = 0
+	for _, child in ball:GetChildren() do
+		if
+			child:GetAttribute("BallVisualPanel") == true
+			or string.match(child.Name, "^PannaBallPanel_%d+$") ~= nil
+		then
+			panelCount += 1
+		end
+	end
+	if panelCount ~= #BALL_PANEL_DIRECTIONS then
+		return false
+	end
+	for index = 1, #BALL_PANEL_DIRECTIONS do
+		local panel = ball:FindFirstChild(string.format("PannaBallPanel_%02d", index))
+		if
+			not panel
+			or not panel:IsA("BasePart")
+			or panel:GetAttribute("BallVisualPanel") ~= true
+			or panel.Anchored
+			or not panel.Massless
+			or panel.CanCollide
+			or panel.CanTouch
+			or panel.CanQuery
+		then
+			return false
+		end
+		local weld = panel:FindFirstChild("PanelWeld")
+		if
+			not weld
+			or not weld:IsA("WeldConstraint")
+			or weld.Part0 ~= ball
+			or weld.Part1 ~= panel
+		then
+			return false
+		end
+	end
+	return true
+end
+
+local function ensureBallVisual(ball: BasePart, settings: BallSettings)
+	if not hasValidBallVisual(ball, settings) then
+		createBallVisual(ball, settings)
+	end
+end
+
+local function ensureBallAttachment(ball: BasePart, name: string, position: Vector3): Attachment
+	local existing = ball:FindFirstChild(name)
+	if existing and existing:IsA("Attachment") then
+		existing.Position = position
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+	local attachment = Instance.new("Attachment")
+	attachment.Name = name
+	attachment.Position = position
+	attachment.Parent = ball
+	return attachment
+end
+
+local function ensureBallTrail(ball: BasePart, settings: BallSettings)
+	local trailTop =
+		ensureBallAttachment(ball, "PannaTrailTop", Vector3.new(0, settings.Radius * 0.25, 0))
+	local trailBottom =
+		ensureBallAttachment(ball, "PannaTrailBottom", Vector3.new(0, -settings.Radius * 0.25, 0))
+	local existing = ball:FindFirstChild("PannaSpeedTrail")
+	local trail: Trail
+	if existing and existing:IsA("Trail") then
+		trail = existing
+	else
+		if existing then
+			existing:Destroy()
+		end
+		trail = Instance.new("Trail")
+		trail.Name = "PannaSpeedTrail"
+		trail.Parent = ball
+	end
+	trail.Attachment0 = trailTop
+	trail.Attachment1 = trailBottom
+	trail.Enabled = false
+	trail.FaceCamera = true
+	trail.LightEmission = 0.08
+	trail.Lifetime = settings.Trail.Lifetime
+	trail.MinLength = 0.15
+	trail.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.White),
+		ColorSequenceKeypoint.new(0.45, Color3.fromRGB(218, 222, 220)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(151, 157, 154)),
+	})
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.55),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.WidthScale = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, settings.Trail.WidthStart),
+		NumberSequenceKeypoint.new(1, settings.Trail.WidthEnd),
+	})
+end
+
 local function createBall(
 	parent: Instance,
 	name: string,
@@ -361,6 +530,7 @@ local function createBall(
 	ball:SetAttribute("BallRevision", 0)
 	ball:SetAttribute("LastAction", "Reset")
 	ball:SetAttribute("ControlModel", "PhysicalForce")
+	createBallVisual(ball, settings)
 
 	local controlAttachment = Instance.new("Attachment")
 	controlAttachment.Name = "PannaControlAttachment"
@@ -383,39 +553,7 @@ local function createBall(
 	rollTorque.Enabled = false
 	rollTorque.Parent = ball
 
-	local trailTop = Instance.new("Attachment")
-	trailTop.Name = "PannaTrailTop"
-	trailTop.Position = Vector3.new(0, settings.Radius * 0.55, 0)
-	trailTop.Parent = ball
-
-	local trailBottom = Instance.new("Attachment")
-	trailBottom.Name = "PannaTrailBottom"
-	trailBottom.Position = Vector3.new(0, -settings.Radius * 0.55, 0)
-	trailBottom.Parent = ball
-
-	local trail = Instance.new("Trail")
-	trail.Name = "PannaSpeedTrail"
-	trail.Attachment0 = trailTop
-	trail.Attachment1 = trailBottom
-	trail.Enabled = false
-	trail.FaceCamera = true
-	trail.LightEmission = 0.8
-	trail.Lifetime = settings.Trail.Lifetime
-	trail.MinLength = 0.08
-	trail.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.White),
-		ColorSequenceKeypoint.new(0.35, COLORS.Cyan),
-		ColorSequenceKeypoint.new(1, COLORS.Pink),
-	})
-	trail.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.12),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	trail.WidthScale = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, settings.Trail.WidthStart),
-		NumberSequenceKeypoint.new(1, settings.Trail.WidthEnd),
-	})
-	trail.Parent = ball
+	ensureBallTrail(ball, settings)
 	if arenaId then
 		ball:SetAttribute("ArenaId", arenaId)
 	end
@@ -1942,6 +2080,7 @@ local function validateConfig(config: Config)
 	assert(world.GoalHeight > ball.Radius * 2, "GoalHeight must be taller than the ball")
 	assert(world.GoalDepth > ball.Radius * 2, "GoalDepth must be deeper than the ball")
 	assert(ball.Radius > 0, "Config.Ball.Radius must be positive")
+	assert(ball.VisualVersion ~= "", "Config.Ball.VisualVersion must not be empty")
 	assert(ball.Density > 0, "Config.Ball.Density must be positive")
 	assert(
 		ball.Friction >= 0 and ball.Friction <= 2,
@@ -1961,14 +2100,20 @@ local function configureWorldPhysics(root: Model, ballSettings: BallSettings)
 		1,
 		1
 	)
+	local canonicalBalls: { BasePart } = {}
 	for _, descendant in root:GetDescendants() do
 		if descendant:IsA("BasePart") then
 			if descendant.Name == "Ball" or descendant:GetAttribute("TrainingBall") == true then
 				descendant.CustomPhysicalProperties = physicalProperties
+				table.insert(canonicalBalls, descendant)
 			elseif descendant.Name == "Court" then
 				descendant.CustomPhysicalProperties = PITCH_PHYSICAL_PROPERTIES
 			end
 		end
+	end
+	for _, ball in canonicalBalls do
+		ensureBallVisual(ball, ballSettings)
+		ensureBallTrail(ball, ballSettings)
 	end
 end
 
@@ -1984,6 +2129,7 @@ local function isCompatibleBakedDistrict(candidate: Instance, config: Config): b
 		candidate:GetAttribute("LayoutVersion") ~= config.Version
 		or candidate:GetAttribute("FieldStyle") ~= config.World.FieldStyle
 		or candidate:GetAttribute("ArenaCount") ~= ARENA_COUNT
+		or candidate:GetAttribute("BallVisualVersion") ~= config.Ball.VisualVersion
 		or math.abs(bakedBallRadius - config.Ball.Radius) > 1e-4
 		or not candidate:FindFirstChild("DistrictEnvironment")
 		or not candidate:FindFirstChild("Lobby")
@@ -2021,6 +2167,7 @@ function WorldBuilder.Build(config: Config): Model
 	root:SetAttribute("FieldStyle", config.World.FieldStyle)
 	root:SetAttribute("LayoutVersion", config.Version)
 	root:SetAttribute("BallRadius", config.Ball.Radius)
+	root:SetAttribute("BallVisualVersion", config.Ball.VisualVersion)
 	root:SetAttribute("RoomStateContract", table.concat(ROOM_STATES, ","))
 
 	createPannaDistrict(root, config.World)

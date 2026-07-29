@@ -18,6 +18,7 @@ type BallMode = "Free" | "Controlled" | "Contested" | "Shot" | "Flight" | "Bounc
 type ChargeState = {
 	action: string,
 	startedAt: number,
+	expiresAt: number,
 	matchId: string,
 	arenaId: string,
 	revision: number,
@@ -128,6 +129,7 @@ export type Service = typeof(setmetatable(
 		playerConnections: { [Player]: RBXScriptConnection },
 		characterConnections: { [Player]: RBXScriptConnection },
 		onPanna: ((Player, Player) -> ())?,
+		onAction: ((Player, string, string?, number?) -> ())?,
 		pannaDetector: any,
 		heartbeat: RBXScriptConnection?,
 		playerAddedConnection: RBXScriptConnection?,
@@ -282,9 +284,9 @@ local function ensureBallRuntime(ball: BasePart, config: any): (VectorForce, Tor
 	controlTorque.Enabled = false
 
 	local radius = config.Ball.Radius
-	local trailTop = ensureAttachment(ball, "PannaTrailTop", Vector3.new(0, radius * 0.55, 0))
+	local trailTop = ensureAttachment(ball, "PannaTrailTop", Vector3.new(0, radius * 0.25, 0))
 	local trailBottom =
-		ensureAttachment(ball, "PannaTrailBottom", Vector3.new(0, -radius * 0.55, 0))
+		ensureAttachment(ball, "PannaTrailBottom", Vector3.new(0, -radius * 0.25, 0))
 	local trailInstance = ball:FindFirstChild("PannaSpeedTrail")
 	local trail: Trail
 	if trailInstance and trailInstance:IsA("Trail") then
@@ -301,16 +303,16 @@ local function ensureBallRuntime(ball: BasePart, config: any): (VectorForce, Tor
 	trail.Attachment1 = trailBottom
 	trail.Enabled = false
 	trail.FaceCamera = true
-	trail.LightEmission = 0.8
+	trail.LightEmission = 0.08
 	trail.Lifetime = config.Ball.Trail.Lifetime
-	trail.MinLength = 0.08
+	trail.MinLength = 0.15
 	trail.Color = ColorSequence.new({
 		ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-		ColorSequenceKeypoint.new(0.35, Color3.fromRGB(34, 238, 255)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 54, 162)),
+		ColorSequenceKeypoint.new(0.45, Color3.fromRGB(218, 222, 220)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(151, 157, 154)),
 	})
 	trail.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.12),
+		NumberSequenceKeypoint.new(0, 0.55),
 		NumberSequenceKeypoint.new(1, 1),
 	})
 	trail.WidthScale = NumberSequence.new({
@@ -335,6 +337,7 @@ function BallService.new(config: any, arenas: any): Service
 		playerConnections = {},
 		characterConnections = {},
 		onPanna = nil,
+		onAction = nil,
 		pannaDetector = nil,
 		heartbeat = nil,
 		playerAddedConnection = nil,
@@ -475,6 +478,7 @@ function BallService._watchCharacter(self: Service, player: Player, character: M
 	if previous then
 		previous:Disconnect()
 	end
+	self:_clearPlayerRuntime(player)
 	self:_setCharacterCollisionGroup(player)
 	self.characterConnections[player] = character.DescendantAdded:Connect(
 		function(descendant: Instance)
@@ -596,7 +600,7 @@ function BallService._validateMovement(
 	if not root or not humanoid or humanoid.Health <= 0 or not character then
 		self.movementSamples[player] = nil
 		self.dashes[player] = nil
-		self.shields[player] = nil
+		self:_clearShield(player)
 		return false
 	end
 
@@ -751,7 +755,7 @@ function BallService._ejectIntruders(self: Service, now: number)
 					player:SetAttribute("ArenaIntrusionCount", intrusions + 1)
 					self.movementSamples[player] = nil
 					self.dashes[player] = nil
-					self.shields[player] = nil
+					self:_clearShield(player)
 					self.arenas:ReturnToStreet(state.arena, player)
 					self:_setCharacterCollisionGroup(player)
 				end
@@ -762,6 +766,50 @@ end
 
 function BallService.SetPannaCallback(self: Service, callback: (Player, Player) -> ())
 	self.onPanna = callback
+end
+
+function BallService.SetActionCallback(
+	self: Service,
+	callback: (Player, string, string?, number?) -> ()
+)
+	self.onAction = callback
+end
+
+function BallService._emitAction(
+	self: Service,
+	player: Player,
+	action: string,
+	mode: string?,
+	lateral: number?
+)
+	local callback = self.onAction
+	if not callback then
+		return
+	end
+	local success, message = pcall(callback, player, action, mode, lateral)
+	if not success then
+		warn("[BallService] Player action callback failed:", message)
+	end
+end
+
+function BallService._clearShield(self: Service, player: Player)
+	if self.shields[player] == nil then
+		return
+	end
+	self.shields[player] = nil
+	self:_emitAction(player, "Shield", "Stop", 0)
+end
+
+function BallService._clearCharge(self: Service, player: Player)
+	if self.charges[player] == nil then
+		return
+	end
+	self.charges[player] = nil
+	self:_emitAction(player, "Charge", "Stop", 0)
+end
+
+function BallService.CancelCharge(self: Service, player: Player)
+	self:_clearCharge(player)
 end
 
 function BallService._feedback(
@@ -866,7 +914,7 @@ function BallService._setBallMode(
 	state.modeSince = os.clock()
 	state.revision += 1
 	if previousOwner and previousOwner ~= owner then
-		self.shields[previousOwner] = nil
+		self:_clearShield(previousOwner)
 		self.feints[previousOwner] = nil
 	end
 	if mode == "Controlled" and owner then
@@ -895,9 +943,9 @@ function BallService._markAction(_self: Service, state: BallState, action: strin
 end
 
 function BallService._clearPlayerRuntime(self: Service, player: Player)
-	self.charges[player] = nil
+	self:_clearCharge(player)
 	self.dashes[player] = nil
-	self.shields[player] = nil
+	self:_clearShield(player)
 	self.feints[player] = nil
 	for _, state in self.states do
 		state.buffered[player] = nil
@@ -1045,7 +1093,7 @@ function BallService._activeShield(
 		or (root.Position - state.arena.Ball.Position).Magnitude
 			> self.config.Actions.Shield.Radius
 	then
-		self.shields[player] = nil
+		self:_clearShield(player)
 		return nil
 	end
 	local currentDirection = BallMath.PreferredControlDirection(
@@ -1063,7 +1111,7 @@ function BallService._stepShields(self: Service, now: number)
 	for player in self.shields do
 		local state = self:_stateForPlayer(player)
 		if not state then
-			self.shields[player] = nil
+			self:_clearShield(player)
 		else
 			self:_activeShield(state, player, now)
 		end
@@ -1081,6 +1129,14 @@ function BallService._stepFeints(self: Service, now: number)
 			or player:GetAttribute("ControlsLocked") == true
 		then
 			self.feints[player] = nil
+		end
+	end
+end
+
+function BallService._stepCharges(self: Service, now: number)
+	for player, charge in self.charges do
+		if now >= charge.expiresAt then
+			self:_clearCharge(player)
 		end
 	end
 end
@@ -1267,16 +1323,24 @@ function BallService._executeKick(
 	local speed = settings.SpeedMinimum + (settings.SpeedMaximum - settings.SpeedMinimum) * power
 	local lift = settings.LiftMinimum + (settings.LiftMaximum - settings.LiftMinimum) * power
 	local rootVelocity = self:_trustedCarrierVelocity(player, root, os.clock())
-	local velocity = direction * speed
-		+ rootVelocity * shot.PlayerVelocityCarry
-		+ Vector3.new(0, lift, 0)
-	local rollAxis = Vector3.new(0, 1, 0):Cross(direction)
-	local angular = rollAxis * settings.RollSpin * shot.AngularVelocityScale
-		+ Vector3.yAxis
-			* math.clamp(spin, -1, 1)
-			* shot.SideSpinMaximum
-			* settings.SideSpinMultiplier
-			* shot.AngularVelocityScale
+	local velocity =
+		BallMath.LaunchVelocity(direction, speed, lift, rootVelocity, shot.PlayerVelocityCarry)
+	if not velocity then
+		return false
+	end
+	local horizontalVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+	local horizontalSpeed = horizontalVelocity.Magnitude
+	local yawSpin = math.clamp(spin, -1, 1) * shot.SideSpinMaximum * settings.SideSpinMultiplier
+	local angular = BallMath.LaunchAngularVelocity(
+		horizontalVelocity,
+		horizontalSpeed,
+		self.config.Ball.Radius,
+		settings.RollRatio,
+		yawSpin
+	)
+	if not angular then
+		return false
+	end
 	local launched = self:_launch(
 		state,
 		player,
@@ -1289,6 +1353,7 @@ function BallService._executeKick(
 	)
 	if launched then
 		state.arena.Ball:SetAttribute("LastShotType", shotType)
+		self:_emitAction(player, "Kick", shotType, 0)
 	end
 	return launched
 end
@@ -1308,13 +1373,24 @@ function BallService._executePass(
 	local speed = pass.SpeedMinimum + (pass.SpeedMaximum - pass.SpeedMinimum) * power
 	local lift = pass.LiftMinimum + (pass.LiftMaximum - pass.LiftMinimum) * power
 	local rootVelocity = self:_trustedCarrierVelocity(player, root, os.clock())
-	local velocity = direction * speed
-		+ rootVelocity * pass.PlayerVelocityCarry
-		+ Vector3.new(0, lift, 0)
-	local angular = Vector3.new(0, 1, 0):Cross(direction)
-		* pass.RollSpin
-		* pass.AngularVelocityScale
-	return self:_launch(
+	local velocity =
+		BallMath.LaunchVelocity(direction, speed, lift, rootVelocity, pass.PlayerVelocityCarry)
+	if not velocity then
+		return false
+	end
+	local horizontalVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+	local horizontalSpeed = horizontalVelocity.Magnitude
+	local angular = BallMath.LaunchAngularVelocity(
+		horizontalVelocity,
+		horizontalSpeed,
+		self.config.Ball.Radius,
+		pass.RollRatio,
+		0
+	)
+	if not angular then
+		return false
+	end
+	local launched = self:_launch(
 		state,
 		player,
 		"Pass",
@@ -1324,6 +1400,10 @@ function BallService._executePass(
 		pass.ShooterRecaptureSeconds,
 		pass.StateSeconds
 	)
+	if launched then
+		self:_emitAction(player, "Pass", "Ground", 0)
+	end
+	return launched
 end
 
 function BallService._controlGraceSeconds(self: Service, state: BallState): number
@@ -1359,6 +1439,7 @@ function BallService._executeTrap(
 	state.lastTouch = player
 	ball:SetAttribute("LastTouchUserId", player.UserId)
 	ball:SetAttribute("LastActionUserId", player.UserId)
+	self:_emitAction(player, "Trap", "Control", 0)
 	return true
 end
 
@@ -1411,11 +1492,16 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 	local action = if type(payload) == "table" and type(payload.action) == "string"
 		then payload.action
 		else ""
+	local releasedCharge: ChargeState? = nil
 	local state = self:_stateForPlayer(player)
 	local rawSequence = if type(payload) == "table" then payload.sequence else nil
 	local sequence = if type(rawSequence) == "number" and finiteNumber(rawSequence)
 		then math.floor(rawSequence)
 		else 0
+	if action == "Kick" or action == "Pass" then
+		releasedCharge = self.charges[player]
+		self:_clearCharge(player)
+	end
 	if type(payload) ~= "table" or action == "" then
 		return self:_feedback(state, false, false, "InvalidPayload", action, sequence, 0)
 	end
@@ -1520,17 +1606,19 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		self.charges[player] = {
 			action = chargeAction,
 			startedAt = now,
+			expiresAt = now + self.config.Actions.ChargeMaximumSeconds,
 			matchId = state.match.Id,
 			arenaId = state.arena.Id,
 			revision = state.revision,
 			buffered = buffered,
 		}
+		self:_emitAction(player, "Charge", chargeAction, 0)
 		return self:_feedback(state, true, true, "Charging", action, sequence, 0)
 	end
 
 	if action == "Shield" and payload.active == false then
 		local wasActive = self.shields[player] ~= nil
-		self.shields[player] = nil
+		self:_clearShield(player)
 		return self:_feedback(
 			state,
 			true,
@@ -1549,7 +1637,7 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		if not ready then
 			return self:_feedback(state, false, false, "Cooldown", action, sequence, cooldown)
 		end
-		self.shields[player] = nil
+		self:_clearShield(player)
 		local dashSeconds = math.max(0, self.config.Actions.DashSeconds)
 		self.dashes[player] = {
 			direction = resolvedDirection,
@@ -1564,6 +1652,7 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		end
 		root.AssemblyLinearVelocity = resolvedDirection * self.config.Actions.DashSpeed
 			+ Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+		self:_emitAction(player, "Dash", "Forward", 0)
 		return self:_feedback(state, true, true, "Executed", action, sequence, cooldown)
 	end
 
@@ -1590,12 +1679,12 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 			startedAt = now,
 			expiresAt = now + self.config.Actions.Shield.MaximumSeconds,
 		}
+		self:_emitAction(player, "Shield", "Start", 0)
 		return self:_feedback(state, true, true, "Executed", action, sequence, cooldown)
 	end
 
 	if action == "Kick" or action == "Pass" then
-		local charge = self.charges[player]
-		self.charges[player] = nil
+		local charge = releasedCharge
 		if
 			not charge
 			or charge.action ~= action
@@ -1761,16 +1850,38 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		local contactDirection = safeHorizontalDirection(ballHorizontal, resolvedDirection)
 			or resolvedDirection
 		local launchDirection = (contactDirection * 0.65 + resolvedDirection * 0.35).Unit
-		local launched = self:_launch(
-			state,
-			player,
-			"Tackle",
-			launchDirection * tackle.ImpulseSpeed + Vector3.new(0, tackle.Lift, 0),
-			Vector3.new(0, 1, 0):Cross(launchDirection) * tackle.AngularVelocityScale,
-			other,
-			tackle.ReleaseSeconds,
-			tackle.ReleaseSeconds
+		local velocity = BallMath.LaunchVelocity(
+			launchDirection,
+			tackle.ImpulseSpeed,
+			tackle.Lift,
+			Vector3.zero,
+			0
 		)
+		local angular = if velocity
+			then BallMath.LaunchAngularVelocity(
+				Vector3.new(velocity.X, 0, velocity.Z),
+				Vector3.new(velocity.X, 0, velocity.Z).Magnitude,
+				self.config.Ball.Radius,
+				tackle.RollRatio,
+				0
+			)
+			else nil
+		local launched = false
+		if velocity and angular then
+			launched = self:_launch(
+				state,
+				player,
+				"Tackle",
+				velocity,
+				angular,
+				other,
+				tackle.ReleaseSeconds,
+				tackle.ReleaseSeconds
+			)
+		end
+		if launched then
+			self:_emitAction(player, "Tackle", "Standing", 0)
+		end
 		return self:_feedback(
 			state,
 			launched,
@@ -1806,7 +1917,7 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		if not ready then
 			return self:_feedback(state, false, false, "Cooldown", action, sequence, cooldown)
 		end
-		self.shields[player] = nil
+		self:_clearShield(player)
 		self.feints[player] = {
 			variant = variant :: string,
 			direction = resolvedDirection,
@@ -1818,6 +1929,7 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		}
 		self:_markAction(state, "Feint", player)
 		state.arena.Ball:SetAttribute("LastFeintVariant", variant)
+		self:_emitAction(player, "Feint", variant :: string, math.clamp(lateral, -1, 1))
 		return self:_feedback(state, true, true, "Executed", action, sequence, cooldown)
 	end
 
@@ -1865,16 +1977,33 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		if not self.pannaDetector:Begin(player, other, state.arena.Ball) then
 			return self:_feedback(state, false, false, "PannaUnavailable", action, sequence, 0)
 		end
-		local launched = self:_launch(
-			state,
-			player,
-			"Skill",
-			resolvedDirection * panna.Speed + Vector3.new(0, panna.Lift, 0),
-			Vector3.new(0, 1, 0):Cross(resolvedDirection) * panna.AngularVelocityScale,
-			player,
-			panna.ShooterRecaptureSeconds,
-			panna.ReleaseSeconds
-		)
+		local velocity =
+			BallMath.LaunchVelocity(resolvedDirection, panna.Speed, panna.Lift, Vector3.zero, 0)
+		local angular = if velocity
+			then BallMath.LaunchAngularVelocity(
+				Vector3.new(velocity.X, 0, velocity.Z),
+				Vector3.new(velocity.X, 0, velocity.Z).Magnitude,
+				self.config.Ball.Radius,
+				panna.RollRatio,
+				0
+			)
+			else nil
+		local launched = false
+		if velocity and angular then
+			launched = self:_launch(
+				state,
+				player,
+				"Skill",
+				velocity,
+				angular,
+				player,
+				panna.ShooterRecaptureSeconds,
+				panna.ReleaseSeconds
+			)
+		end
+		if launched then
+			self:_emitAction(player, "Skill", "Panna", 0)
+		end
 		return self:_feedback(
 			state,
 			launched,
@@ -2342,26 +2471,38 @@ function BallService._applySpinPhysics(self: Service, state: BallState, deltaTim
 		return
 	end
 	local ball = state.arena.Ball
+	local aerodynamics = self.config.Ball.Aerodynamics
 	local spin = self.config.Ball.Spin
+	local acceleration = if state.grounded
+		then Vector3.zero
+		else BallMath.AerodynamicDragAcceleration(
+			ball.AssemblyLinearVelocity,
+			aerodynamics.DragCoefficient,
+			aerodynamics.MaximumDragAcceleration
+		)
 	local horizontalSpeed =
 		Vector3.new(ball.AssemblyLinearVelocity.X, 0, ball.AssemblyLinearVelocity.Z).Magnitude
 	if
-		horizontalSpeed < spin.MinimumCurveSpeed
-		or math.abs(ball.AssemblyAngularVelocity.Y) < spin.MinimumYawRate
+		horizontalSpeed >= spin.MinimumCurveSpeed
+		and math.abs(ball.AssemblyAngularVelocity.Y) >= spin.MinimumYawRate
 	then
-		return
-	end
-	local acceleration = BallMath.MagnusAcceleration(
-		ball.AssemblyLinearVelocity,
-		ball.AssemblyAngularVelocity,
-		spin.MagnusCoefficient,
-		spin.MaximumCurveAcceleration
-	)
-	if state.grounded then
-		acceleration *= spin.GroundCurveMultiplier
+		local curveAcceleration = BallMath.MagnusAcceleration(
+			ball.AssemblyLinearVelocity,
+			ball.AssemblyAngularVelocity,
+			spin.MagnusCoefficient,
+			spin.MaximumCurveAcceleration
+		)
+		if state.grounded then
+			curveAcceleration *= spin.GroundCurveMultiplier
+		end
+		acceleration += curveAcceleration
 	end
 	if acceleration.Magnitude > 0.001 then
-		ball:ApplyImpulse(acceleration * ball.AssemblyMass * math.clamp(deltaTime, 0, 0.1))
+		ball:ApplyImpulse(
+			acceleration
+				* ball.AssemblyMass
+				* math.clamp(deltaTime, 0, aerodynamics.MaximumStepSeconds)
+		)
 	end
 end
 
@@ -2371,8 +2512,12 @@ function BallService._stepMode(self: Service, state: BallState, now: number)
 			self:_setBallMode(state, "Free", nil, nil)
 		end
 	elseif state.mode == "Shot" and now >= state.modeUntil then
-		self:_setBallMode(state, "Flight", nil, nil)
-		state.modeUntil = now + self.config.Ball.Limits.MinimumFlightSeconds
+		if state.grounded then
+			self:_setBallMode(state, "Free", nil, nil)
+		else
+			self:_setBallMode(state, "Flight", nil, nil)
+			state.modeUntil = now + self.config.Ball.Limits.MinimumFlightSeconds
+		end
 	elseif state.mode == "Flight" then
 		if
 			state.grounded
@@ -2430,11 +2575,15 @@ function BallService._enforceBallLimits(self: Service, state: BallState)
 		ball:ApplyAngularImpulse((angular - ball.AssemblyAngularVelocity) * moment)
 	end
 	local speed = limitedVelocity.Magnitude
-	if not state.trail.Enabled and speed >= self.config.Ball.Trail.EnabledSpeed then
-		state.trail.Enabled = true
-	elseif state.trail.Enabled and speed <= self.config.Ball.Trail.DisabledSpeed then
-		state.trail.Enabled = false
+	local trailState = state.mode == "Shot" or state.mode == "Flight" or state.mode == "Bounce"
+	local trailEligible = trailState and not state.grounded
+	local trailEnabled = false
+	if trailEligible then
+		trailEnabled = if state.trail.Enabled
+			then speed > self.config.Ball.Trail.DisabledSpeed
+			else speed >= self.config.Ball.Trail.EnabledSpeed
 	end
+	state.trail.Enabled = trailEnabled
 end
 
 function BallService._enforceBounds(self: Service, state: BallState)
@@ -2476,6 +2625,7 @@ function BallService._step(self: Service, deltaTime: number)
 	self:_stepDashes(now)
 	self:_stepShields(now)
 	self:_stepFeints(now)
+	self:_stepCharges(now)
 	local ownersByBall: { [BasePart]: Player? } = {}
 	local lastTouchesByBall: { [BasePart]: Player? } = {}
 	for _, state in self.states do

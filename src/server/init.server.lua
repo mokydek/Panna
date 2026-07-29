@@ -141,6 +141,10 @@ end
 
 remotes.ActionRequest.OnServerEvent:Connect(function(player: Player, payload: any)
 	if not limiter:Allow(player, "Action", 1) then
+		local rejectedAction = requestString(payload, "action")
+		if rejectedAction == "Kick" or rejectedAction == "Pass" then
+			ballService:CancelCharge(player)
+		end
 		sendActionFeedback(player, payload, {
 			accepted = false,
 			executed = false,

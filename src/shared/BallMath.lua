@@ -43,6 +43,80 @@ function BallMath.ChargePower(elapsed: number, chargeSeconds: number, minimumPow
 	return minimum + (1 - minimum) * math.clamp(elapsed / duration, 0, 1)
 end
 
+function BallMath.LaunchVelocity(
+	direction: Vector3,
+	horizontalSpeed: number,
+	lift: number,
+	carrierVelocity: Vector3,
+	carrierVelocityCarry: number
+): Vector3?
+	if
+		not BallMath.IsFiniteVector3(direction)
+		or not BallMath.IsFiniteVector3(carrierVelocity)
+		or not BallMath.IsFiniteNumber(horizontalSpeed)
+		or not BallMath.IsFiniteNumber(lift)
+		or not BallMath.IsFiniteNumber(carrierVelocityCarry)
+	then
+		return nil
+	end
+	local forward = BallMath.HorizontalUnit(direction, Vector3.zero)
+	if not forward then
+		return nil
+	end
+	local carrierHorizontal = Vector3.new(carrierVelocity.X, 0, carrierVelocity.Z)
+	return forward * math.max(0, horizontalSpeed)
+		+ carrierHorizontal * math.max(0, carrierVelocityCarry)
+		+ Vector3.yAxis * math.max(0, lift)
+end
+
+function BallMath.LaunchAngularVelocity(
+	direction: Vector3,
+	horizontalSpeed: number,
+	radius: number,
+	rollRatio: number,
+	yawSpin: number
+): Vector3?
+	if
+		not BallMath.IsFiniteVector3(direction)
+		or not BallMath.IsFiniteNumber(horizontalSpeed)
+		or not BallMath.IsFiniteNumber(radius)
+		or not BallMath.IsFiniteNumber(rollRatio)
+		or not BallMath.IsFiniteNumber(yawSpin)
+		or radius <= 0.05
+	then
+		return nil
+	end
+	local forward = BallMath.HorizontalUnit(direction, Vector3.zero)
+	if not forward then
+		return nil
+	end
+	local rollAxis = Vector3.new(0, 1, 0):Cross(forward)
+	local rollSpeed = math.max(0, horizontalSpeed) / radius * rollRatio
+	return rollAxis * rollSpeed + Vector3.yAxis * yawSpin
+end
+
+function BallMath.AerodynamicDragAcceleration(
+	linearVelocity: Vector3,
+	coefficient: number,
+	maximumAcceleration: number
+): Vector3
+	if
+		not BallMath.IsFiniteVector3(linearVelocity)
+		or not BallMath.IsFiniteNumber(coefficient)
+		or not BallMath.IsFiniteNumber(maximumAcceleration)
+	then
+		return Vector3.zero
+	end
+	local speed = linearVelocity.Magnitude
+	if speed < 0.05 then
+		return Vector3.zero
+	end
+	return BallMath.ClampMagnitude(
+		-linearVelocity * speed * math.max(0, coefficient),
+		math.max(0, maximumAcceleration)
+	)
+end
+
 function BallMath.DirectionDot(first: Vector3, second: Vector3): number
 	local firstHorizontal = BallMath.HorizontalUnit(first, Vector3.zero)
 	local secondHorizontal = BallMath.HorizontalUnit(second, Vector3.zero)

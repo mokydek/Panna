@@ -30,7 +30,15 @@ local clientRoot = StarterPlayer.StarterPlayerScripts:FindFirstChild("PannaClien
 expect(clientRoot ~= nil, "PannaClient was not mapped by Rojo")
 local effectScope = require(clientRoot:FindFirstChild("EffectScope"))
 local clientModules = {}
-for _, moduleName in { "ControlCatalog", "InputController", "UIController" } do
+for _, moduleName in
+	{
+		"ControlCatalog",
+		"InputController",
+		"PlayerAnimationController",
+		"ProceduralPoseCatalog",
+		"UIController",
+	}
+do
 	local clientModule = clientRoot:FindFirstChild(moduleName)
 	expect(clientModule ~= nil, moduleName .. " was not mapped by Rojo")
 	local ok, result = pcall(require, clientModule)
@@ -40,6 +48,8 @@ for _, moduleName in { "ControlCatalog", "InputController", "UIController" } do
 end
 
 local controlCatalog = clientModules.ControlCatalog
+local playerAnimationControllerModule = clientModules.PlayerAnimationController
+local proceduralPoseCatalog = clientModules.ProceduralPoseCatalog
 local uiControllerModule = clientModules.UIController
 expect(#controlCatalog.ActionOrder == 7, "control catalog must expose seven HUD actions")
 expect(#controlCatalog.TouchOrder == 8, "touch catalog must include ShotMode")
@@ -105,6 +115,309 @@ for action, inputs in expectedInputs do
 	end
 end
 
+local expectedPoseActions = {
+	Charge = true,
+	Kick = true,
+	Pass = true,
+	Trap = true,
+	Shield = true,
+	Dash = true,
+	Tackle = true,
+	Skill = true,
+	Feint = true,
+}
+for _, action in proceduralPoseCatalog.SupportedActions do
+	expect(expectedPoseActions[action] == true, "unexpected or duplicate pose action " .. action)
+	expectedPoseActions[action] = nil
+end
+expect(next(expectedPoseActions) == nil, "procedural pose catalog misses a football action")
+
+local expectedFeintPoses = {
+	StepOver = true,
+	Cut = true,
+	DragBack = true,
+	Roulette = true,
+}
+for _, variant in proceduralPoseCatalog.FeintVariants do
+	expect(expectedFeintPoses[variant] == true, "unexpected or duplicate feint pose " .. variant)
+	expectedFeintPoses[variant] = nil
+end
+expect(next(expectedFeintPoses) == nil, "procedural pose catalog misses a feint variant")
+
+local allowedPoseJoints = {
+	Root = true,
+	Waist = true,
+	Neck = true,
+	LeftShoulder = true,
+	RightShoulder = true,
+	LeftHip = true,
+	RightHip = true,
+	LeftKnee = true,
+	RightKnee = true,
+	LeftAnkle = true,
+	RightAnkle = true,
+}
+local declaredPoseJoints = table.clone(allowedPoseJoints)
+for _, joint in proceduralPoseCatalog.NormalizedJoints do
+	expect(declaredPoseJoints[joint] == true, "pose catalog declares an unsafe joint " .. joint)
+	declaredPoseJoints[joint] = nil
+end
+expect(next(declaredPoseJoints) == nil, "pose catalog joint whitelist is incomplete")
+
+local function finiteCFrame(value: any): boolean
+	if typeof(value) ~= "CFrame" then
+		return false
+	end
+	for _, component in { (value :: CFrame):GetComponents() } do
+		if
+			type(component) ~= "number"
+			or component ~= component
+			or math.abs(component) == math.huge
+		then
+			return false
+		end
+	end
+	return true
+end
+
+local function poseHasMotion(pose: { [string]: CFrame }): boolean
+	for _, transform in pose do
+		if
+			transform.Position.Magnitude > 1e-4
+			or transform.LookVector:Dot(Vector3.new(0, 0, -1)) < 0.99999
+			or transform.UpVector:Dot(Vector3.yAxis) < 0.99999
+		then
+			return true
+		end
+	end
+	return false
+end
+
+local poseScenarios = {
+	{ action = "Charge", mode = "Kick" },
+	{ action = "Charge", mode = "Pass" },
+	{ action = "Kick", mode = "Low" },
+	{ action = "Kick", mode = "Normal" },
+	{ action = "Kick", mode = "Chip" },
+	{ action = "Pass", mode = "Ground" },
+	{ action = "Trap", mode = "Control" },
+	{ action = "Shield", mode = "Start" },
+	{ action = "Dash", mode = "Forward" },
+	{ action = "Tackle", mode = "Standing" },
+	{ action = "Skill", mode = "Panna" },
+	{ action = "Feint", mode = "StepOver" },
+	{ action = "Feint", mode = "Cut" },
+	{ action = "Feint", mode = "DragBack" },
+	{ action = "Feint", mode = "Roulette" },
+}
+for _, scenario in poseScenarios do
+	expect(
+		proceduralPoseCatalog.IsSupported(scenario.action, scenario.mode),
+		scenario.action .. "/" .. scenario.mode .. " pose is not supported"
+	)
+	local duration = proceduralPoseCatalog.GetDuration(scenario.action, scenario.mode)
+	expect(
+		type(duration) == "number" and duration >= 0.05 and duration <= 5,
+		scenario.action .. "/" .. scenario.mode .. " duration is invalid"
+	)
+	for _, elapsed in { 0, duration * 0.5, duration, duration * 2, math.huge } do
+		local pose = proceduralPoseCatalog.Sample(
+			scenario.action,
+			scenario.mode,
+			elapsed,
+			duration,
+			0.8,
+			-0.65
+		)
+		expect(type(pose) == "table", scenario.action .. " pose sample is not a table")
+		for joint, transform in pose do
+			expect(allowedPoseJoints[joint] == true, scenario.action .. " writes an unsafe joint")
+			expect(finiteCFrame(transform), scenario.action .. " produced a non-finite pose")
+		end
+		if elapsed == duration * 0.5 then
+			expect(poseHasMotion(pose), scenario.action .. "/" .. scenario.mode .. " has no motion")
+		end
+	end
+end
+expect(
+	next(proceduralPoseCatalog.Sample("Unknown", "", 0.2, 0.4, 1, 0)) == nil,
+	"unknown action produced a procedural pose"
+)
+expect(
+	proceduralPoseCatalog.IsHold("Charge")
+		and proceduralPoseCatalog.IsHold("Shield")
+		and not proceduralPoseCatalog.IsHold("Kick"),
+	"pose hold classification is invalid"
+)
+
+for _, methodName in
+	{
+		"new",
+		"ApplyEffect",
+		"BeginCharge",
+		"CancelCharge",
+		"ApplyActionFeedback",
+		"Reset",
+		"ResetTransientState",
+		"Destroy",
+	}
+do
+	expect(
+		type(playerAnimationControllerModule[methodName]) == "function",
+		"PlayerAnimationController." .. methodName .. " missing"
+	)
+end
+
+local animationRig = Instance.new("Model")
+animationRig.Name = "AnimationSmokeRig"
+local animationRoot = Instance.new("Part")
+animationRoot.Name = "AnimationRoot"
+animationRoot.Anchored = true
+animationRoot.Parent = animationRig
+local animationLeg = Instance.new("Part")
+animationLeg.Name = "AnimationLeg"
+animationLeg.Anchored = true
+animationLeg.Parent = animationRig
+local animationMotor = Instance.new("Motor6D")
+animationMotor.Name = "RightHip"
+animationMotor.Part0 = animationRoot
+animationMotor.Part1 = animationLeg
+animationMotor.Parent = animationRoot
+animationRig.Parent = Workspace
+local animationAttributes: { [string]: any } = {
+	MatchId = "AnimationMatch",
+	ArenaId = "Arena_1",
+	MatchRevision = 4,
+}
+local animationPlayer: any = {
+	UserId = 7654321,
+	Parent = Workspace,
+	Character = animationRig,
+}
+function animationPlayer:GetAttribute(attributeName: string): any
+	return animationAttributes[attributeName]
+end
+
+local animationController = playerAnimationControllerModule.new(animationPlayer)
+expect(
+	animationController:BeginCharge("Kick", Workspace:GetServerTimeNow() - 0.5),
+	"require-safe animation controller rejected local charge pose"
+)
+animationController:_step()
+expect(
+	poseHasMotion({ RightHip = animationMotor.Transform }),
+	"controller did not apply Motor6D pose"
+)
+local authoritativeChargeStart = animationController.actors[animationPlayer.UserId].hold.startedAt
+animationController:ApplyActionFeedback({
+	action = "ChargeStart",
+	accepted = true,
+	mode = "Kick",
+})
+expect(
+	animationController.actors[animationPlayer.UserId].hold.startedAt == authoritativeChargeStart,
+	"valid ActionFeedback rewound an already-authoritative charge pose"
+)
+local staleChargeStop = {
+	kind = "PlayerAction",
+	matchId = "AnimationMatch",
+	arenaId = "Arena_1",
+	matchRevision = 4,
+	actorUserId = animationPlayer.UserId,
+	action = "Charge",
+	mode = "Stop",
+	lateral = 0,
+	visualRevision = 1,
+	serverTime = Workspace:GetServerTimeNow() - 20,
+}
+expect(animationController:ApplyEffect(staleChargeStop), "stale Charge Stop cue was not consumed")
+expect(
+	animationController.actors[animationPlayer.UserId].hold == nil
+		and animationController.lastVisualRevision[animationPlayer.UserId] == 1,
+	"stale Charge Stop did not clear the active hold"
+)
+animationController:_step()
+expect(
+	not poseHasMotion({ RightHip = animationMotor.Transform }),
+	"controller did not restore Motor6D after a stale Stop cue"
+)
+expect(
+	animationController:BeginCharge("Pass", Workspace:GetServerTimeNow() - 20),
+	"animation controller rejected the hold-timeout fixture"
+)
+animationController:_step()
+expect(
+	animationController.actors[animationPlayer.UserId] == nil
+		and not poseHasMotion({ RightHip = animationMotor.Transform }),
+	"local hold hard-timeout left a stuck pose"
+)
+expect(
+	animationController:BeginCharge("Kick", Workspace:GetServerTimeNow()),
+	"animation controller rejected the explicit cancel fixture"
+)
+animationController:CancelCharge()
+animationController:_step()
+expect(
+	not poseHasMotion({ RightHip = animationMotor.Transform }),
+	"controller did not restore Motor6D after cancelling a hold pose"
+)
+
+local actionServerTime = Workspace:GetServerTimeNow()
+local actionEffect = {
+	kind = "PlayerAction",
+	matchId = "AnimationMatch",
+	arenaId = "Arena_1",
+	matchRevision = 4,
+	actorUserId = 9001,
+	action = "Kick",
+	mode = "Normal",
+	lateral = 0,
+	visualRevision = 1,
+	serverTime = actionServerTime,
+}
+expect(animationController:ApplyEffect(actionEffect), "PlayerAction cue was not consumed")
+expect(
+	animationController.lastVisualRevision[9001] == 1
+		and animationController.actors[9001].action.action == "Kick",
+	"valid scoped PlayerAction cue was not accepted"
+)
+local duplicateCue = table.clone(actionEffect)
+duplicateCue.action = "Dash"
+expect(animationController:ApplyEffect(duplicateCue), "duplicate PlayerAction was not consumed")
+expect(
+	animationController.actors[9001].action.action == "Kick",
+	"duplicate visual revision replaced the accepted animation"
+)
+local wrongScopeCue = table.clone(actionEffect)
+wrongScopeCue.matchId = "WrongMatch"
+wrongScopeCue.visualRevision = 2
+expect(animationController:ApplyEffect(wrongScopeCue), "wrong-scope PlayerAction was not consumed")
+expect(
+	animationController.lastVisualRevision[9001] == 1,
+	"wrong-scope PlayerAction advanced visual revision"
+)
+local staleTimeCue = table.clone(actionEffect)
+staleTimeCue.visualRevision = 2
+staleTimeCue.serverTime = actionServerTime - 20
+expect(animationController:ApplyEffect(staleTimeCue), "stale PlayerAction was not consumed")
+expect(
+	animationController.lastVisualRevision[9001] == 1,
+	"stale PlayerAction advanced visual revision"
+)
+expect(
+	not animationController:ApplyEffect({ kind = "Message" }),
+	"animation controller swallowed a non-animation effect"
+)
+animationController:ResetTransientState()
+expect(
+	next(animationController.actors) == nil and next(animationController.lastVisualRevision) == nil,
+	"animation reset kept actor or revision state"
+)
+animationController:Destroy()
+animationController:Destroy()
+expect(animationController.destroyed, "animation controller destroy is not idempotent")
+animationRig:Destroy()
+
 expect(type(ballMath) == "table", "BallMath module failed to load")
 expect(type(goalMath) == "table", "GoalMath module failed to load")
 for _, functionName in
@@ -114,6 +427,9 @@ for _, functionName in
 		"HorizontalUnit",
 		"ClampMagnitude",
 		"ChargePower",
+		"LaunchVelocity",
+		"LaunchAngularVelocity",
+		"AerodynamicDragAcceleration",
 		"DirectionDot",
 		"ClosestPointOnRay",
 		"ProjectOnPlane",
@@ -145,6 +461,64 @@ local capped = ballMath.ClampMagnitude(Vector3.new(300, 40, 0), config.Ball.Limi
 expect(
 	math.abs(capped.Magnitude - config.Ball.Limits.MaximumSpeed) < 1e-4,
 	"BallMath.ClampMagnitude did not enforce the configured speed cap"
+)
+
+local launchDirection = Vector3.new(0, 0, -1)
+local launchVelocity = ballMath.LaunchVelocity(launchDirection, 50, 24, Vector3.new(10, 7, 0), 0.2)
+expect(launchVelocity ~= nil, "BallMath.LaunchVelocity rejected finite launch inputs")
+local resolvedLaunchVelocity = launchVelocity :: Vector3
+expect(
+	(resolvedLaunchVelocity - Vector3.new(2, 24, -50)).Magnitude < 1e-4,
+	"launch velocity did not keep lift independent from carrier vertical velocity"
+)
+expect(
+	ballMath.LaunchVelocity(launchDirection, 50, 24, Vector3.new(math.huge, 0, 0), 0.2) == nil,
+	"launch velocity accepted a non-finite carrier velocity"
+)
+
+local launchAngular =
+	ballMath.LaunchAngularVelocity(launchDirection, 50, config.Ball.Radius, 0.8, 6)
+expect(launchAngular ~= nil, "BallMath.LaunchAngularVelocity rejected finite launch inputs")
+local resolvedLaunchAngular = launchAngular :: Vector3
+local expectedRollAxis = Vector3.new(0, 1, 0):Cross(launchDirection)
+local expectedRollSpeed = 50 / config.Ball.Radius * 0.8
+expect(
+	math.abs(resolvedLaunchAngular:Dot(expectedRollAxis) - expectedRollSpeed) < 1e-4,
+	"launch roll rate is not coupled to linear speed and ball radius"
+)
+expect(
+	math.abs(resolvedLaunchAngular.Y - 6) < 1e-4
+		and math.abs(resolvedLaunchAngular:Dot(launchDirection)) < 1e-4,
+	"launch angular velocity contains an invalid longitudinal or yaw component"
+)
+expect(
+	ballMath.LaunchAngularVelocity(launchDirection, 50, 0, 0.8, 0) == nil,
+	"launch angular velocity accepted a zero radius"
+)
+
+local dragAcceleration = ballMath.AerodynamicDragAcceleration(
+	Vector3.new(30, 10, -40),
+	config.Ball.Aerodynamics.DragCoefficient,
+	config.Ball.Aerodynamics.MaximumDragAcceleration
+)
+expect(
+	ballMath.IsFiniteVector3(dragAcceleration)
+		and dragAcceleration.Magnitude > 0
+		and dragAcceleration.Magnitude
+			<= config.Ball.Aerodynamics.MaximumDragAcceleration + 1e-4,
+	"aerodynamic drag is not finite and bounded"
+)
+expect(
+	dragAcceleration:Dot(Vector3.new(30, 10, -40)) < 0,
+	"aerodynamic drag accelerates the ball along its velocity"
+)
+expect(
+	ballMath.AerodynamicDragAcceleration(
+		Vector3.zero,
+		config.Ball.Aerodynamics.DragCoefficient,
+		config.Ball.Aerodynamics.MaximumDragAcceleration
+	) == Vector3.zero,
+	"stationary ball received aerodynamic drag"
 )
 local closestPoint, distanceAlong =
 	ballMath.ClosestPointOnRay(Vector3.zero, Vector3.new(0, 0, -1), Vector3.new(3, 0, -7))
@@ -302,8 +676,13 @@ expect(config.Actions.ShieldMaxSeconds == nil, "duplicate shield duration still 
 expect(config.Ball.Pass.StateSeconds > 0, "pass state duration is missing")
 expect(config.Ball.Shot.MinimumFlightSeconds == nil, "flight timing is still coupled to Shot")
 expect(config.Ball.Limits.MinimumFlightSeconds > 0, "neutral minimum flight duration is missing")
-expect(config.Actions.Tackle.AngularVelocityScale > 0, "tackle spin tuning is missing")
-expect(config.Actions.Panna.AngularVelocityScale > 0, "panna spin tuning is missing")
+expect(
+	config.Actions.ChargeMaximumSeconds
+		> math.max(config.Ball.Shot.ChargeSeconds, config.Ball.Pass.ChargeSeconds),
+	"server charge safety timeout is shorter than the playable charge window"
+)
+expect(config.Actions.Tackle.RollRatio > 0, "tackle speed-derived roll tuning is missing")
+expect(config.Actions.Panna.RollRatio > 0, "panna speed-derived roll tuning is missing")
 expect(config.Actions.Panna.ShooterRecaptureSeconds > 0, "panna recapture tuning is missing")
 expect(
 	config.Ball.Capture.OwnerBreakRadius
@@ -516,11 +895,65 @@ expect(
 		and config.Ball.Shot.Types.Normal.LiftMaximum < config.Ball.Shot.Types.Chip.LiftMaximum,
 	"Low, Normal, and Chip lift tuning is not ordered"
 )
+expect(Workspace.Gravity > 0, "ballistic regression requires positive Workspace.Gravity")
+local function ballisticEnvelope(tuning: any): (number, number, number)
+	local velocity = ballMath.LaunchVelocity(
+		Vector3.new(0, 0, -1),
+		tuning.SpeedMaximum,
+		tuning.LiftMaximum,
+		Vector3.zero,
+		0
+	)
+	expect(velocity ~= nil, "full-power ballistic tuning produced no launch velocity")
+	local resolved = velocity :: Vector3
+	local airTime = 2 * resolved.Y / Workspace.Gravity
+	local apexGain = resolved.Y ^ 2 / (2 * Workspace.Gravity)
+	local horizontalRange = Vector3.new(resolved.X, 0, resolved.Z).Magnitude * airTime
+	return airTime, apexGain, horizontalRange
+end
+
+local lowAirTime, lowApex, lowRange = ballisticEnvelope(config.Ball.Shot.Types.Low)
+local normalAirTime, normalApex, normalRange = ballisticEnvelope(config.Ball.Shot.Types.Normal)
+local chipAirTime, chipApex, chipRange = ballisticEnvelope(config.Ball.Shot.Types.Chip)
+expect(
+	lowAirTime < normalAirTime and normalAirTime < chipAirTime,
+	"shot airtime envelopes are not ordered Low < Normal < Chip"
+)
+expect(
+	lowApex < normalApex and normalApex < chipApex,
+	"shot ballistic apex envelopes are not ordered Low < Normal < Chip"
+)
+expect(
+	lowApex <= 0.5 and normalApex >= 1.5 and chipApex >= 5,
+	"shot lifts still produce a plate-flat Low/Normal/Chip trajectory"
+)
+expect(
+	normalAirTime >= 0.25 and chipAirTime >= 0.45,
+	"Normal or Chip airtime is too short for a readable football arc"
+)
+expect(
+	lowRange >= 4
+		and normalRange >= config.World.ArenaLength * 0.25
+		and chipRange >= config.World.ArenaLength * 0.35,
+	"full-power shot range is too short for the arena scale"
+)
+expect(
+	config.Ball.Shot.Types.Chip.LiftMaximum <= config.Ball.Limits.MaximumVerticalSpeed,
+	"Chip lift exceeds the global vertical speed cap"
+)
 expect(
 	config.Ball.Pass.SpeedMaximum <= config.Ball.Limits.MaximumSpeed,
 	"Pass tuning exceeds the global ball speed cap"
 )
+expect(
+	config.Ball.Pass.LiftMaximum < config.Ball.Shot.Types.Low.LiftMinimum,
+	"ground pass lift overlaps the shot trajectory envelope"
+)
 expect(config.Ball.Radius < 1.25 and config.Ball.Radius >= 1, "ball was not made slightly smaller")
+expect(
+	type(config.Ball.VisualVersion) == "string" and config.Ball.VisualVersion ~= "",
+	"soccer-ball visual version is missing"
+)
 local previousMassScale = 0.65 * 1.25 ^ 3
 local tunedMassScale = config.Ball.Density * config.Ball.Radius ^ 3
 expect(
@@ -546,6 +979,33 @@ expect(
 expect(
 	config.Ball.Shot.PlayerVelocityCarry <= 0.2 and config.Ball.Pass.PlayerVelocityCarry <= 0.2,
 	"launch direction still inherits too much player velocity"
+)
+expect(
+	config.Ball.Aerodynamics.DragCoefficient > 0
+		and config.Ball.Aerodynamics.MaximumDragAcceleration > 0
+		and config.Ball.Aerodynamics.MaximumStepSeconds > 0
+		and config.Ball.Aerodynamics.MaximumStepSeconds <= 0.05,
+	"bounded airborne drag tuning is incomplete"
+)
+expect(
+	config.Ball.Trail.EnabledSpeed > config.Ball.Trail.DisabledSpeed
+		and config.Ball.Trail.Lifetime <= 0.1
+		and config.Ball.Trail.WidthStart <= config.Ball.Radius * 0.2,
+	"subtle high-speed trail gating is invalid"
+)
+for _, tuning in config.Ball.Shot.Types do
+	expect(
+		type(tuning.RollRatio) == "number"
+			and tuning.RollRatio == tuning.RollRatio
+			and tuning.RollSpin == nil,
+		"shot tuning did not migrate from arbitrary spin to a finite roll ratio"
+	)
+end
+expect(
+	type(config.Ball.Pass.RollRatio) == "number"
+		and config.Ball.Pass.RollRatio == config.Ball.Pass.RollRatio
+		and config.Ball.Pass.RollSpin == nil,
+	"pass tuning did not migrate from arbitrary spin to a finite roll ratio"
 )
 
 local tackleForward = Vector3.new(0, 0, -1)
@@ -682,6 +1142,10 @@ expect(
 		and math.abs((builtBallRadius :: number) - config.Ball.Radius) < 1e-4,
 	"district bake is not versioned by ball radius"
 )
+expect(
+	world:GetAttribute("BallVisualVersion") == config.Ball.VisualVersion,
+	"district bake is not versioned by the soccer-ball visual contract"
+)
 
 local function expectConfiguredBall(ball: BasePart, label: string)
 	local diameter = config.Ball.Radius * 2
@@ -696,6 +1160,53 @@ local function expectConfiguredBall(ball: BasePart, label: string)
 		math.abs((physicalProperties :: PhysicalProperties).Density - config.Ball.Density) < 1e-4,
 		label .. " density does not match the mass-preserving tune"
 	)
+	expect(
+		ball:GetAttribute("BallVisualVersion") == config.Ball.VisualVersion,
+		label .. " visual version differs from Config"
+	)
+	local panelCount = 0
+	for _, child in ball:GetChildren() do
+		if
+			child:GetAttribute("BallVisualPanel") == true
+			or string.match(child.Name, "^PannaBallPanel_%d+$") ~= nil
+		then
+			panelCount += 1
+		end
+	end
+	expect(panelCount == 6, label .. " must contain exactly six soccer panels")
+	for index = 1, 6 do
+		local panel = ball:FindFirstChild(string.format("PannaBallPanel_%02d", index))
+		expect(panel ~= nil and panel:IsA("BasePart"), label .. " soccer panel is missing")
+		local resolvedPanel = panel :: BasePart
+		expect(
+			resolvedPanel:GetAttribute("BallVisualPanel") == true
+				and resolvedPanel:GetAttribute("PanelIndex") == index,
+			label .. " soccer panel identity is invalid"
+		)
+		expect(
+			resolvedPanel.Shape == Enum.PartType.Cylinder
+				and not resolvedPanel.Anchored
+				and resolvedPanel.Massless
+				and not resolvedPanel.CanCollide
+				and not resolvedPanel.CanTouch
+				and not resolvedPanel.CanQuery,
+			label .. " soccer panel changes canonical ball physics"
+		)
+		expect(
+			math.abs(resolvedPanel.Size.X - config.Ball.Radius * 0.045) < 1e-4
+				and math.abs(resolvedPanel.Size.Y - config.Ball.Radius * 0.42) < 1e-4
+				and math.abs(resolvedPanel.Size.Z - config.Ball.Radius * 0.42) < 1e-4,
+			label .. " soccer panel scale does not follow ball radius"
+		)
+		local weld = resolvedPanel:FindFirstChild("PanelWeld")
+		expect(
+			weld ~= nil
+				and weld:IsA("WeldConstraint")
+				and (weld :: WeldConstraint).Part0 == ball
+				and (weld :: WeldConstraint).Part1 == resolvedPanel,
+			label .. " soccer panel is not welded to the canonical sphere"
+		)
+	end
 	local trailTop = ball:FindFirstChild("PannaTrailTop")
 	local trailBottom = ball:FindFirstChild("PannaTrailBottom")
 	expect(trailTop ~= nil and trailTop:IsA("Attachment"), label .. " trail top is missing")
@@ -704,10 +1215,21 @@ local function expectConfiguredBall(ball: BasePart, label: string)
 		label .. " trail bottom is missing"
 	)
 	expect(
-		math.abs((trailTop :: Attachment).Position.Y - config.Ball.Radius * 0.55) < 1e-4
-			and math.abs((trailBottom :: Attachment).Position.Y + config.Ball.Radius * 0.55)
+		math.abs((trailTop :: Attachment).Position.Y - config.Ball.Radius * 0.25) < 1e-4
+			and math.abs((trailBottom :: Attachment).Position.Y + config.Ball.Radius * 0.25)
 				< 1e-4,
-		label .. " trail offsets do not match the smaller radius"
+		label .. " compact trail offsets do not match the smaller radius"
+	)
+	local trail = ball:FindFirstChild("PannaSpeedTrail")
+	expect(trail ~= nil and trail:IsA("Trail"), label .. " speed trail is missing")
+	local resolvedTrail = trail :: Trail
+	expect(
+		math.abs(resolvedTrail.Lifetime - config.Ball.Trail.Lifetime) < 1e-4
+			and resolvedTrail.Lifetime <= 0.1
+			and resolvedTrail.LightEmission <= 0.1
+			and resolvedTrail.WidthScale.Keypoints[1].Value <= config.Ball.Radius * 0.2
+			and resolvedTrail.Transparency.Keypoints[1].Value >= 0.5,
+		label .. " speed trail still reads as a bright plate"
 	)
 end
 
@@ -899,12 +1421,22 @@ for _, arena in arenaList do
 		arena.Id .. " ball elasticity differs from Config"
 	)
 	for _, descendant in arena.Ball:GetDescendants() do
-		expect(
-			not descendant:IsA("Weld")
-				and not descendant:IsA("WeldConstraint")
-				and not descendant:IsA("Motor6D"),
-			arena.Id .. " ball must not be welded"
-		)
+		if descendant:IsA("WeldConstraint") then
+			local panel = descendant.Parent
+			expect(
+				descendant.Name == "PanelWeld"
+					and panel ~= nil
+					and panel:GetAttribute("BallVisualPanel") == true
+					and descendant.Part0 == arena.Ball
+					and descendant.Part1 == panel,
+				arena.Id .. " contains a non-visual ball weld"
+			)
+		else
+			expect(
+				not descendant:IsA("Weld") and not descendant:IsA("Motor6D"),
+				arena.Id .. " ball contains a gameplay weld"
+			)
+		end
 	end
 	expect(
 		arena.HomeGoal.CanTouch and arena.AwayGoal.CanTouch,
@@ -1124,6 +1656,17 @@ do
 		not state.controlTorque.Enabled and state.controlTorque.Torque.Magnitude < 1e-4,
 		"physical roll torque survived release"
 	)
+	ballService.charges[owner] = {
+		action = "Kick",
+		startedAt = 0,
+		expiresAt = 0,
+		matchId = "ChargeExpirySmoke",
+		arenaId = state.arena.Id,
+		revision = state.revision,
+		buffered = false,
+	}
+	ballServiceModule._stepCharges(ballService, os.clock())
+	expect(ballService.charges[owner] == nil, "expired server charge survived its safety timeout")
 	state.controlForce.Enabled = true
 	state.controlForce.Force = Vector3.new(10, 0, 0)
 	state.controlTorque.Enabled = true
@@ -1138,6 +1681,34 @@ do
 			and state.controlTorque.Torque.Magnitude < 1e-4,
 		"same-mode reconciliation left physical actuators active"
 	)
+
+	ball.AssemblyLinearVelocity = Vector3.new(config.Ball.Trail.EnabledSpeed + 1, 0, 0)
+	state.grounded = false
+	ballServiceModule._setBallMode(ballService, state, "Free", nil, "TrailFreeSmoke")
+	ballServiceModule._enforceBallLimits(ballService, state)
+	expect(not state.trail.Enabled, "high-speed Free ball enabled the flight-only trail")
+	ballServiceModule._setBallMode(ballService, state, "Shot", nil, "TrailShotSmoke")
+	ballServiceModule._enforceBallLimits(ballService, state)
+	expect(state.trail.Enabled, "airborne high-speed Shot did not enable the trail")
+	ball.AssemblyLinearVelocity =
+		Vector3.new((config.Ball.Trail.EnabledSpeed + config.Ball.Trail.DisabledSpeed) * 0.5, 0, 0)
+	ballServiceModule._enforceBallLimits(ballService, state)
+	expect(state.trail.Enabled, "trail hysteresis disabled inside its speed band")
+	ball.AssemblyLinearVelocity =
+		Vector3.new(math.max(0, config.Ball.Trail.DisabledSpeed - 1), 0, 0)
+	ballServiceModule._enforceBallLimits(ballService, state)
+	expect(not state.trail.Enabled, "trail stayed enabled below its disable threshold")
+	ball.AssemblyLinearVelocity = Vector3.new(config.Ball.Trail.EnabledSpeed + 1, 0, 0)
+	state.grounded = true
+	ballServiceModule._enforceBallLimits(ballService, state)
+	expect(not state.trail.Enabled, "grounded fast ball enabled the plate-like trail")
+
+	state.modeUntil = 0
+	state.previousGrounded = true
+	ballServiceModule._stepMode(ballService, state, os.clock())
+	expect(state.mode == "Free", "expired grounded Shot incorrectly transitioned to Flight")
+	ball.AssemblyLinearVelocity = Vector3.zero
+	state.grounded = false
 	ballServiceModule._setBallMode(ballService, state, "Controlled", owner, "LaunchSmoke")
 	expect(
 		not ballServiceModule._launch(
@@ -1217,14 +1788,17 @@ for cycle = 1, 3 do
 		Home = home,
 		Away = away,
 		RematchVotes = {},
+		VisualRevision = 0,
 	}
 	local detachCount = 0
 	local releaseCount = 0
 	local returnCount = 0
 	local stateClearCount = 0
 	local effectCount = 0
+	local playerActionEffects: { any } = {}
 	local service: any = {
 		_setControlsLocked = matchServiceModule._setControlsLocked,
+		_effect = matchServiceModule._effect,
 		matches = { [match.Id] = match },
 		goalPositions = { [match.Id] = Vector3.zero },
 		byPlayer = { [home] = match, [away] = match },
@@ -1259,6 +1833,9 @@ for cycle = 1, 3 do
 						"effect revision was not scoped"
 					)
 					effectCount += 1
+					if payload.kind == "PlayerAction" then
+						table.insert(playerActionEffects, payload)
+					end
 				end,
 			},
 			StateUpdate = {
@@ -1281,6 +1858,33 @@ for cycle = 1, 3 do
 	matchServiceModule._effect(service, match, unscopedEffect)
 	expect(effectCount == 2, "match effect did not reach both participants")
 	expect(unscopedEffect.matchId == nil, "effect scoping mutated the caller payload")
+	matchServiceModule.BroadcastPlayerAction(service, home, "Kick", "Normal", 4)
+	expect(effectCount == 4, "player action cue did not reach both match participants")
+	expect(#playerActionEffects == 2, "player action cue recipient count is invalid")
+	for _, cue in playerActionEffects do
+		expect(cue.kind == "PlayerAction", "visual cue kind is invalid")
+		expect(cue.actorUserId == home.UserId, "visual cue actor is invalid")
+		expect(cue.action == "Kick" and cue.mode == "Normal", "visual cue action data is invalid")
+		expect(cue.lateral == 1, "visual cue lateral input was not clamped")
+		expect(cue.visualRevision == 1, "first visual cue revision is invalid")
+		expect(
+			type(cue.serverTime) == "number" and cue.serverTime == cue.serverTime,
+			"visual cue server time is invalid"
+		)
+	end
+	table.clear(playerActionEffects)
+	matchServiceModule.BroadcastPlayerAction(service, away, "Shield", "Stop", -0.4)
+	expect(effectCount == 6 and #playerActionEffects == 2, "second visual cue was not broadcast")
+	for _, cue in playerActionEffects do
+		expect(
+			cue.actorUserId == away.UserId
+				and cue.action == "Shield"
+				and cue.mode == "Stop"
+				and math.abs(cue.lateral + 0.4) < 1e-4
+				and cue.visualRevision == 2,
+			"visual cue revision or payload did not advance monotonically"
+		)
+	end
 	matchServiceModule._setControlsLocked(service, match, true)
 	expect(home:GetAttribute("ControlsLocked") == true, "home did not lock before cleanup")
 	expect(away:GetAttribute("ControlsLocked") == true, "away did not lock before cleanup")

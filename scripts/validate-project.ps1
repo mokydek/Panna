@@ -413,6 +413,8 @@ $requiredPaths = @(
     'src/client/init.client.lua',
     'src/client/EffectScope.lua',
     'src/client/ControlCatalog.lua',
+    'src/client/ProceduralPoseCatalog.lua',
+    'src/client/PlayerAnimationController.lua',
     'src/client/UIController.lua',
     'src/client/InputController.lua',
     'src/world/PannaDistrict.model.json',
@@ -575,7 +577,10 @@ if (Test-Path -LiteralPath $ballServicePath -PathType Leaf) {
         @{ Name = 'Torque actuator'; Source = $ballServiceSource; Regex = 'Instance\s*\.\s*new\s*\(\s*["'']Torque["'']\s*\)' },
         @{ Name = 'linear impulse'; Source = $ballServiceMask; Regex = ':\s*ApplyImpulse\s*\(' },
         @{ Name = 'angular impulse'; Source = $ballServiceMask; Regex = ':\s*ApplyAngularImpulse\s*\(' },
-        @{ Name = 'manual server ownership'; Source = $ballServiceMask; Regex = ':\s*SetNetworkOwner\s*\(\s*nil\s*\)' }
+        @{ Name = 'manual server ownership'; Source = $ballServiceMask; Regex = ':\s*SetNetworkOwner\s*\(\s*nil\s*\)' },
+        @{ Name = 'shared launch velocity'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*LaunchVelocity\s*\(' },
+        @{ Name = 'shared launch angular velocity'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*LaunchAngularVelocity\s*\(' },
+        @{ Name = 'shared aerodynamic drag'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*AerodynamicDragAcceleration\s*\(' }
     )
     foreach ($requiredPrimitive in $requiredPhysicalPatterns) {
         if (([string] $requiredPrimitive.Source) -notmatch ([string] $requiredPrimitive.Regex)) {
@@ -585,6 +590,127 @@ if (Test-Path -LiteralPath $ballServicePath -PathType Leaf) {
     }
     if ($forbiddenBallControlCount -eq 0) {
         Add-Pass 'BallService keeps the canonical ball unanchored, server-owned, and force/impulse driven.'
+    }
+
+    $flightContractFailures = 0
+    foreach ($requiredFlightPattern in @(
+        @{ Name = 'flight-state trail gate'; Regex = 'trailState\s*=\s*state\.mode\s*==\s*["'']Shot["'']' },
+        @{ Name = 'airborne trail gate'; Regex = 'trailEligible\s*=\s*trailState\s+and\s+not\s+state\.grounded' },
+        @{ Name = 'grounded Shot exit'; Regex = '(?s)state\.mode\s*==\s*["'']Shot["''].*?state\.grounded.*?_setBallMode\s*\(\s*state\s*,\s*["'']Free["'']' }
+    )) {
+        if ($ballServiceSource -notmatch [string] $requiredFlightPattern.Regex) {
+            Add-Failure "src/server/BallService.lua is missing $($requiredFlightPattern.Name); fast ground movement must not look like an airborne plate."
+            $flightContractFailures += 1
+        }
+    }
+    if ($flightContractFailures -eq 0) {
+        Add-Pass 'BallService gates its subtle trail to airborne action states and exits grounded Shot directly.'
+    }
+}
+
+$ballMathPath = Join-Path $root 'src/shared/BallMath.lua'
+$configPath = Join-Path $root 'src/shared/Config.lua'
+$worldBuilderPath = Join-Path $root 'src/server/WorldBuilder.lua'
+if ((Test-Path -LiteralPath $ballMathPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $configPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $worldBuilderPath -PathType Leaf)) {
+    $ballMathSource = Get-Content -LiteralPath $ballMathPath -Raw
+    $configSource = Get-Content -LiteralPath $configPath -Raw
+    $worldBuilderSource = Get-Content -LiteralPath $worldBuilderPath -Raw
+    $footballVisualFailures = 0
+    foreach ($helperName in @('LaunchVelocity', 'LaunchAngularVelocity', 'AerodynamicDragAcceleration')) {
+        if ($ballMathSource -notmatch ('function\s+BallMath\.' + [regex]::Escape($helperName) + '\s*\(')) {
+            Add-Failure "BallMath is missing the production helper $helperName."
+            $footballVisualFailures += 1
+        }
+    }
+    foreach ($configToken in @('VisualVersion', 'Aerodynamics', 'DragCoefficient', 'MaximumDragAcceleration', 'MaximumStepSeconds', 'RollRatio', 'ChargeMaximumSeconds')) {
+        if ($configSource -notmatch ('\b' + [regex]::Escape($configToken) + '\b')) {
+            Add-Failure "Config is missing football flight/visual tuning '$configToken'."
+            $footballVisualFailures += 1
+        }
+    }
+    foreach ($legacySpinToken in @('RollSpin', 'AngularVelocityScale')) {
+        if ($configSource -match ('\b' + [regex]::Escape($legacySpinToken) + '\b')) {
+            Add-Failure "Config still contains legacy arbitrary spin tuning '$legacySpinToken'."
+            $footballVisualFailures += 1
+        }
+    }
+    foreach ($worldToken in @('BallVisualVersion', 'PannaBallPanel_%02d', 'BallVisualPanel', 'PanelWeld', 'ensureBallTrail')) {
+        if ($worldBuilderSource -notmatch [regex]::Escape($worldToken)) {
+            Add-Failure "WorldBuilder soccer-ball contract is missing '$worldToken'."
+            $footballVisualFailures += 1
+        }
+    }
+    if ($worldBuilderSource -notmatch 'Massless\s*=\s*true' -or
+        $worldBuilderSource -notmatch 'CanCollide\s*=\s*false' -or
+        $worldBuilderSource -notmatch 'WeldConstraint') {
+        Add-Failure 'WorldBuilder soccer panels are not explicitly cosmetic, massless, and welded.'
+        $footballVisualFailures += 1
+    }
+    if ($footballVisualFailures -eq 0) {
+        Add-Pass 'Shared football launch/drag math and the versioned six-panel ball visual contract are present.'
+    }
+}
+
+$matchServicePath = Join-Path $root 'src/server/MatchService.lua'
+if ((Test-Path -LiteralPath $ballServicePath -PathType Leaf) -and
+    (Test-Path -LiteralPath $matchServicePath -PathType Leaf)) {
+    $ballServiceSource = Get-Content -LiteralPath $ballServicePath -Raw
+    $matchServiceSource = Get-Content -LiteralPath $matchServicePath -Raw
+    $actionCueFailures = 0
+    foreach ($actionName in @('Charge', 'Kick', 'Pass', 'Trap', 'Dash', 'Shield', 'Tackle', 'Feint', 'Skill')) {
+        $cuePattern = '_emitAction\s*\(\s*player\s*,\s*["'']' + [regex]::Escape($actionName) + '["'']'
+        if ($ballServiceSource -notmatch $cuePattern) {
+            Add-Failure "BallService does not emit the player-animation cue '$actionName'."
+            $actionCueFailures += 1
+        }
+    }
+    foreach ($fixedCue in @(
+        @{ Action = 'Charge'; Mode = 'Stop' },
+        @{ Action = 'Pass'; Mode = 'Ground' },
+        @{ Action = 'Trap'; Mode = 'Control' },
+        @{ Action = 'Dash'; Mode = 'Forward' },
+        @{ Action = 'Shield'; Mode = 'Start' },
+        @{ Action = 'Shield'; Mode = 'Stop' },
+        @{ Action = 'Tackle'; Mode = 'Standing' },
+        @{ Action = 'Skill'; Mode = 'Panna' }
+    )) {
+        $fixedPattern = '_emitAction\s*\(\s*player\s*,\s*["'']' +
+            [regex]::Escape([string] $fixedCue.Action) + '["'']\s*,\s*["'']' +
+            [regex]::Escape([string] $fixedCue.Mode) + '["'']'
+        if ($ballServiceSource -notmatch $fixedPattern) {
+            Add-Failure "BallService is missing the '$($fixedCue.Action)/$($fixedCue.Mode)' animation cue."
+            $actionCueFailures += 1
+        }
+    }
+    foreach ($matchToken in @('SetActionCallback', 'BroadcastPlayerAction', 'PlayerAction', 'VisualRevision', 'visualRevision', 'serverTime', 'actorUserId')) {
+        if ($matchServiceSource -notmatch [regex]::Escape($matchToken)) {
+            Add-Failure "MatchService player-animation broadcast is missing '$matchToken'."
+            $actionCueFailures += 1
+        }
+    }
+    if ($matchServiceSource -notmatch 'VisualRevision\s*\+=\s*1' -or
+        $matchServiceSource -notmatch '(?s)BroadcastPlayerAction.*?self\s*:\s*_effect\s*\(') {
+        Add-Failure 'MatchService does not advance and scope the replicated player-action visual revision.'
+        $actionCueFailures += 1
+    }
+    foreach ($chargeSafetyToken in @('expiresAt', 'CancelCharge', '_stepCharges', '_clearPlayerRuntime')) {
+        if ($ballServiceSource -notmatch [regex]::Escape($chargeSafetyToken)) {
+            Add-Failure "BallService charge lifecycle is missing '$chargeSafetyToken'."
+            $actionCueFailures += 1
+        }
+    }
+    $serverInitPath = Join-Path $root 'src/server/init.server.lua'
+    if (Test-Path -LiteralPath $serverInitPath -PathType Leaf) {
+        $serverInitSource = Get-Content -LiteralPath $serverInitPath -Raw
+        if ($serverInitSource -notmatch '(?s)RateLimited.*?CancelCharge|CancelCharge.*?RateLimited') {
+            Add-Failure 'Rate-limited Kick/Pass releases do not cancel the authoritative charge hold.'
+            $actionCueFailures += 1
+        }
+    }
+    if ($actionCueFailures -eq 0) {
+        Add-Pass 'Server action cues cover every football mechanic and broadcast a scoped monotonic visual revision.'
     }
 }
 
@@ -649,6 +775,106 @@ if ((Test-Path -LiteralPath $controlCatalogPath -PathType Leaf) -and (Test-Path 
     }
     if ($missingGuideContracts -eq 0) {
         Add-Pass 'In-game controls guide covers ball control and every ability with reusable toggle bindings.'
+    }
+}
+
+$poseCatalogPath = Join-Path $root 'src/client/ProceduralPoseCatalog.lua'
+$playerAnimationPath = Join-Path $root 'src/client/PlayerAnimationController.lua'
+$clientInitPath = Join-Path $root 'src/client/init.client.lua'
+if ((Test-Path -LiteralPath $poseCatalogPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $playerAnimationPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $clientInitPath -PathType Leaf)) {
+    $poseCatalogSource = Get-Content -LiteralPath $poseCatalogPath -Raw
+    $playerAnimationSource = Get-Content -LiteralPath $playerAnimationPath -Raw
+    $clientInitSource = Get-Content -LiteralPath $clientInitPath -Raw
+    $animationFailures = 0
+
+    foreach ($actionName in @('Charge', 'Kick', 'Pass', 'Trap', 'Shield', 'Dash', 'Tackle', 'Skill', 'Feint')) {
+        if ($poseCatalogSource -notmatch ('["'']' + [regex]::Escape($actionName) + '["'']')) {
+            Add-Failure "ProceduralPoseCatalog is missing the football action '$actionName'."
+            $animationFailures += 1
+        }
+    }
+    foreach ($variantName in @('StepOver', 'Cut', 'DragBack', 'Roulette')) {
+        if ($poseCatalogSource -notmatch ('["'']' + [regex]::Escape($variantName) + '["'']')) {
+            Add-Failure "ProceduralPoseCatalog is missing the feint variant '$variantName'."
+            $animationFailures += 1
+        }
+    }
+    foreach ($jointName in @('Root', 'Waist', 'Neck', 'LeftShoulder', 'RightShoulder', 'LeftHip', 'RightHip', 'LeftKnee', 'RightKnee', 'LeftAnkle', 'RightAnkle')) {
+        if ($poseCatalogSource -notmatch ('["'']' + [regex]::Escape($jointName) + '["'']')) {
+            Add-Failure "ProceduralPoseCatalog normalized joint whitelist is missing '$jointName'."
+            $animationFailures += 1
+        }
+    }
+    foreach ($catalogMethod in @('IsSupported', 'GetDuration', 'IsHold', 'Sample')) {
+        if ($poseCatalogSource -notmatch ('function\s+ProceduralPoseCatalog\.' + [regex]::Escape($catalogMethod) + '\s*\(')) {
+            Add-Failure "ProceduralPoseCatalog.$catalogMethod is missing."
+            $animationFailures += 1
+        }
+    }
+
+    foreach ($controllerToken in @('Motor6D', 'AnimationConstraint', 'PreSimulation', 'MAX_EFFECT_AGE', 'MAX_EFFECT_FUTURE', 'MAX_HOLD_AGE', 'lastVisualRevision', '_scopeMatches', 'visualRevision', 'serverTime')) {
+        if ($playerAnimationSource -notmatch [regex]::Escape($controllerToken)) {
+            Add-Failure "PlayerAnimationController runtime contract is missing '$controllerToken'."
+            $animationFailures += 1
+        }
+    }
+    foreach ($controllerMethod in @('new', 'ApplyEffect', 'BeginCharge', 'CancelCharge', 'ApplyActionFeedback', 'Reset', 'ResetTransientState', 'Destroy')) {
+        if ($playerAnimationSource -notmatch ('function\s+PlayerAnimationController\.' + [regex]::Escape($controllerMethod) + '\s*\(')) {
+            Add-Failure "PlayerAnimationController.$controllerMethod is missing."
+            $animationFailures += 1
+        }
+    }
+
+    $forbiddenAnimationMutationPatterns = @(
+        @{ Name = 'world CFrame mutation'; Regex = '\.\s*CFrame\s*=' },
+        @{ Name = 'character PivotTo mutation'; Regex = ':\s*PivotTo\s*\(' },
+        @{ Name = 'linear velocity mutation'; Regex = '\.\s*AssemblyLinearVelocity\s*=' },
+        @{ Name = 'angular velocity mutation'; Regex = '\.\s*AssemblyAngularVelocity\s*=' },
+        @{ Name = 'WalkSpeed mutation'; Regex = '\.\s*WalkSpeed\s*=' },
+        @{ Name = 'JumpHeight mutation'; Regex = '\.\s*JumpHeight\s*=' },
+        @{ Name = 'JumpPower mutation'; Regex = '\.\s*JumpPower\s*=' },
+        @{ Name = 'AutoRotate mutation'; Regex = '\.\s*AutoRotate\s*=' },
+        @{ Name = 'physical impulse'; Regex = ':\s*Apply(?:Angular)?Impulse\s*\(' }
+    )
+    $animationMask = (Get-LuauCodeMask -Text $playerAnimationSource).Mask
+    foreach ($forbiddenMutation in $forbiddenAnimationMutationPatterns) {
+        if ($animationMask -match [string] $forbiddenMutation.Regex) {
+            Add-Failure "PlayerAnimationController contains $($forbiddenMutation.Name); procedural animation must remain additive and cosmetic."
+            $animationFailures += 1
+        }
+    }
+
+    foreach ($initToken in @('PlayerAnimationController', 'PlayerAnimationController.new(LOCAL_PLAYER)', 'playerAnimations:ResetTransientState()', 'playerAnimations:Destroy()', 'playerAnimations:ApplyActionFeedback(payload)', 'playerAnimations:ApplyEffect(payload)')) {
+        if ($clientInitSource -notmatch [regex]::Escape($initToken)) {
+            Add-Failure "Client animation lifecycle integration is missing '$initToken'."
+            $animationFailures += 1
+        }
+    }
+    if ($clientInitSource -notmatch '(?s)if\s+not\s+playerAnimations:ApplyEffect\s*\(\s*payload\s*\)\s+then\s+ui:ApplyEffect') {
+        Add-Failure 'Client does not consume PlayerAction effects before the generic UI notification path.'
+        $animationFailures += 1
+    }
+    if ($clientInitSource -notmatch '(?s)if\s+inputController:ApplyActionFeedback\s*\(\s*payload\s*\)\s+then\s+playerAnimations:ApplyActionFeedback') {
+        Add-Failure 'Client applies animation feedback before InputController validates its sequence and match context.'
+        $animationFailures += 1
+    }
+    if ($playerAnimationSource -notmatch '(?s)not\s+actor\s+or\s+not\s+actor\.hold.*?BeginCharge') {
+        Add-Failure 'ActionFeedback can rewind an already-authoritative Charge pose.'
+        $animationFailures += 1
+    }
+    if ($playerAnimationSource -notmatch 'now\s*-\s*hold\.startedAt\s*>\s*MAX_HOLD_AGE') {
+        Add-Failure 'Held procedural poses do not have a local hard-timeout.'
+        $animationFailures += 1
+    }
+    if ($playerAnimationSource -notmatch '(?s)if\s+not\s+timestampValid\s+and\s+not\s+isStop\s+then.*?if\s+isStop\s+then.*?actor\.hold\s*=\s*nil') {
+        Add-Failure 'Stale scoped Stop/Cancel cues cannot clear a held procedural pose.'
+        $animationFailures += 1
+    }
+
+    if ($animationFailures -eq 0) {
+        Add-Pass 'Asset-free player poses cover every mechanic with scoped cue filtering, additive joints, and full client lifecycle cleanup.'
     }
 }
 

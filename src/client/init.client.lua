@@ -7,6 +7,8 @@ local Workspace = game:GetService("Workspace")
 local UIController = require(script:WaitForChild("UIController") :: ModuleScript)
 local InputController = require(script:WaitForChild("InputController") :: ModuleScript)
 local EffectScope = require(script:WaitForChild("EffectScope") :: ModuleScript)
+local PlayerAnimationController =
+	require(script:WaitForChild("PlayerAnimationController") :: ModuleScript)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local REMOTE_WAIT_SECONDS = 20
@@ -83,6 +85,7 @@ local function waitForRemote(
 end
 
 local ui = UIController.new()
+local playerAnimations = PlayerAnimationController.new(LOCAL_PLAYER)
 local inputController: any = nil
 local connections: { RBXScriptConnection } = {}
 local destroyed = false
@@ -106,6 +109,7 @@ local function resetTransientClientState()
 	if destroyed then
 		return
 	end
+	playerAnimations:ResetTransientState()
 	if inputController then
 		inputController:ResetTransientState()
 	else
@@ -223,6 +227,7 @@ local function destroy()
 		inputController:Destroy()
 		inputController = nil
 	end
+	playerAnimations:Destroy()
 	for _, connection in connections do
 		connection:Disconnect()
 	end
@@ -336,6 +341,7 @@ task.spawn(function()
 			local success, message = pcall(function()
 				if inputController then
 					if inputController:ApplyActionFeedback(payload) then
+						playerAnimations:ApplyActionFeedback(payload)
 						ui:ApplyActionFeedback(payload)
 					end
 				else
@@ -417,7 +423,9 @@ task.spawn(function()
 						resetTransientClientState()
 					end
 				end
-				ui:ApplyEffect(payload)
+				if not playerAnimations:ApplyEffect(payload) then
+					ui:ApplyEffect(payload)
+				end
 			end)
 			if not success then
 				warn("[PannaClient] Rejected malformed Effect:", message)
@@ -428,6 +436,7 @@ task.spawn(function()
 	inputController = InputController.new(actionRequest, ui)
 	for _, payload in feedbackBeforeInput do
 		if inputController:ApplyActionFeedback(payload) then
+			playerAnimations:ApplyActionFeedback(payload)
 			ui:ApplyActionFeedback(payload)
 		end
 	end

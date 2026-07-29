@@ -46,7 +46,7 @@ Workspace
 
 `CentralStreet` непрерывно идёт от точки появления мимо трёх пар комнат к `EndLandmark`. Комнаты располагаются слева и справа от улицы; у каждой есть переход и собственная уличная точка возврата.
 
-Основной Rojo-проект помещает запечённый `src/world/PannaDistrict.model.json` в `Workspace`, чтобы район был виден в Edit Mode. При старте `WorldBuilder` переиспользует корень только если это `Model` с совпадающими `LayoutVersion` и `BallRadius`, `ArenaCount = 6`, моделями `DistrictEnvironment`/`Lobby` и ровно шестью комнатами в `Arenas`. Несовместимый корень заменяется новым, собранным вне `Workspace`; ошибка посередине генерации не оставляет частичный мир. Поэтому изменение `Config.Ball.Radius` не может незаметно оставить старые сферы в совместимом bake.
+Основной Rojo-проект помещает запечённый `src/world/PannaDistrict.model.json` в `Workspace`, чтобы район был виден в Edit Mode. При старте `WorldBuilder` переиспользует корень только если это `Model` с совпадающими `LayoutVersion`, `BallRadius` и `BallVisualVersion`, `ArenaCount = 6`, моделями `DistrictEnvironment`/`Lobby` и ровно шестью комнатами в `Arenas`. Несовместимый корень заменяется новым, собранным вне `Workspace`; ошибка посередине генерации не оставляет частичный мир. Поэтому изменение радиуса или визуального контракта мяча не может незаметно оставить старые сферы в совместимом bake.
 
 ## Корень, улица и лобби
 
@@ -70,9 +70,10 @@ Workspace
 - `FieldStyle = Config.World.FieldStyle`;
 - `LayoutVersion = Config.Version`;
 - `BallRadius = Config.Ball.Radius`;
+- `BallVisualVersion = Config.Ball.VisualVersion`;
 - `RoomStateContract = "Free,Waiting,Countdown,Active,Result"`.
 
-`PannaDistrict` и `DistrictEnvironment` имеют `FieldStyle = "NaturalGrassFootballV1"`; `DistrictEnvironment` также имеет `DistrictStyle = "NaturalFootballDistrict"` и `ExternalAssetCount = 0`. У `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`. Отсутствующий или несовпадающий `FieldStyle` либо `BallRadius` делает старый bake несовместимым и заставляет builder безопасно пересобрать ту же сцену.
+`PannaDistrict` и `DistrictEnvironment` имеют `FieldStyle = "NaturalGrassFootballV1"`; `DistrictEnvironment` также имеет `DistrictStyle = "NaturalFootballDistrict"` и `ExternalAssetCount = 0`. У `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`. Отсутствующий или несовпадающий `FieldStyle`, `BallRadius` либо `BallVisualVersion` делает старый bake несовместимым и заставляет builder безопасно пересобрать ту же сцену.
 
 `QueuePad` и `QueuePrompt` имеют `QueueMode = "1v1"`. UI-кнопка быстрой очереди и prompt должны идти через один серверный путь. Для prompt используются `T` на клавиатуре и `R3` на геймпаде; touch использует стандартное взаимодействие Roblox.
 
@@ -101,7 +102,7 @@ Workspace
 | `HomeGoal` | `BasePart` | Невидимая геометрия створа/глубины Home; передняя грань задаёт плоскость линии |
 | `AwayGoal` | `BasePart` | Невидимая геометрия створа/глубины Away; передняя грань задаёт плоскость линии |
 | `Bounds` | `BasePart` | Объём sanity-check, изоляции и восстановления мяча |
-| `Ball` | `BasePart` | Единственный авторитетный мяч комнаты: всегда `Anchored = false` и server-owned; в `Controlled` движение создают ограниченные `VectorForce`/`Torque` |
+| `Ball` | `BasePart` | Единственный авторитетный мяч комнаты: всегда `Anchored = false` и server-owned; в `Controlled` движение создают ограниченные `VectorForce`/`Torque`, визуальное вращение читается по шести welded-панелям |
 | `EntryZone` | `BasePart` | Внешняя зона входа; содержит `EntryPrompt` |
 | `ExitZone` | `BasePart` | Внутренняя зона выхода; содержит `ExitPrompt` |
 | `Barrier` | `BasePart` | Ворота комнаты, открытые в ожидании и закрытые во время матча/результата |
@@ -116,6 +117,8 @@ Workspace
 Матчевое ядро (`HomeSpawn`…`Ball`) является жёстким требованием конструктора `ArenaService`. Комнатные зоны сейчас читаются как optional для совместимости со старой картой, но для `PannaDistrict` и `RoomService` считаются обязательными: отсутствующий prompt отключит вход/выход и даст предупреждение сервера.
 
 Начальный `Ball` имеет `ControlModel = "PhysicalForce"`, `BallState = "Reset"`, нулевые owner/last touch/revision и физические дочерние объекты `PannaControlAttachment`, `PannaDribbleForce` (`VectorForce`) и `PannaRollTorque` (`Torque`). Оба actuator в Edit Mode/`Reset` выключены и обнулены; `BallService` переиспользует или восстанавливает этот runtime-контракт и включает их только для `Controlled`. Текущий bake с маркером `PANNA_BAKE_OK` содержит ровно семь `PannaDribbleForce` и семь `PannaRollTorque`: шесть матчевых комплектов и один комплект выключенных объектов у свободного `TrainingBall`.
+
+Source-контракт дополнительно требует на корне и каждом мяче `BallVisualVersion = "SoccerPanelsV1"`, ровно шесть `PannaBallPanel_01`…`06` и их `WeldConstraint`. Панели — `Cylinder`-Parts, `Massless = true`, `CanCollide/CanTouch/CanQuery = false`; повреждённый набор builder удаляет и создаёт заново. Текущий canonical bake содержит контракт для всех семи мячей, а Studio smoke подтвердил панели и runtime-восстановление trail.
 
 ### Атрибуты модели комнаты
 
@@ -154,7 +157,7 @@ Free → Waiting → Countdown → Active → Result → Free
 
 ## Геометрия, физика и изоляция
 
-Невидимые маркеры закреплены и не сталкиваются с персонажами/мячом. Матчевый `Ball` остаётся `Anchored = false` и server-owned (`network owner = nil`) во всех состояниях. В `Controlled` сервер строит цель перед направлением `HumanoidRootPart`, выравнивает её по земле raycast-проверкой, превращает ограниченную ошибку позиции/скорости в `PannaDribbleForce` и поддерживает качение через `PannaRollTorque`. `Spherecast` только сокращает физическую цель перед препятствием и никогда не двигает сферу прямой записью transform. При shot/pass/panna/tackle/loss/death/detach actuators выключаются, а действие применяет серверный линейный/угловой импульс; в `Shot`/`Flight`/`Bounce` допускается ограниченная Magnus-подкрутка. Reset авторитетно возвращает мяч на `BallSpawn`. Видимые стойки, сетка, ограждения, трибуны и theme-модели не должны подменять служебные зоны.
+Невидимые маркеры закреплены и не сталкиваются с персонажами/мячом. Матчевый `Ball` остаётся `Anchored = false` и server-owned (`network owner = nil`) во всех состояниях. В `Controlled` сервер строит цель перед направлением `HumanoidRootPart`, выравнивает её по земле raycast-проверкой, превращает ограниченную ошибку позиции/скорости в `PannaDribbleForce` и поддерживает качение через `PannaRollTorque`. `Spherecast` только сокращает физическую цель перед препятствием и никогда не двигает сферу прямой записью transform. При shot/pass/panna/tackle/loss/death/detach actuators выключаются: действие получает launch-скорость с отдельным подъёмом и угловую скорость `speed / radius × RollRatio`. Ограниченный квадратичный drag действует только в воздухе; наземный `Shot` возвращается в `Free`, реально оторвавшийся проходит `Flight`/`Bounce`. Тонкий нейтральный trail разрешён только быстрому негрунтовому `Shot`/`Flight`/`Bounce`, а Magnus использует фактические скорости. Reset авторитетно возвращает мяч на `BallSpawn`. Видимые стойки, сетка, ограждения, трибуны и theme-модели не должны подменять служебные зоны.
 
 У мяча, участников каждой комнаты и остальных игроков назначены отдельные collision groups. Физические столкновения мяча с персонажами намеренно отключены: касание, владение, shield, tackle и финты определяет авторитетная серверная геометрия, чтобы клиентская физика персонажа не могла напрямую толкать мяч. Мяч при этом сталкивается с площадкой и окружением. Периодический scan занятого `Bounds` возвращает постороннего к `StreetSpawn` даже если регистрация collision groups недоступна. Матрицу столкновений, `CanCollide`, `CanTouch`, `CanQuery` и поведение StreamingEnabled всё равно необходимо проверить в многоклиентном Studio-прогоне.
 
@@ -165,7 +168,7 @@ Free → Waiting → Countdown → Active → Result → Free
 - `HomeSpawn.TeamSide = "Home"`, `AwaySpawn.TeamSide = "Away"`;
 - голевые зоны: `TeamSide` и `ArenaId`;
 - `Bounds.ArenaId`;
-- `Ball.ArenaId`, `OwnerUserId`, `LastTouchUserId`, `BallState`, `BallRevision`, `LastAction`, `ControlModel = "PhysicalForce"`;
+- `Ball.ArenaId`, `OwnerUserId`, `LastTouchUserId`, `BallState`, `BallRevision`, `LastAction`, `ControlModel = "PhysicalForce"`, `BallVisualVersion`;
 - `Barrier.Closed`;
 - комнатные зоны: `ArenaId` и `RoomAction`.
 

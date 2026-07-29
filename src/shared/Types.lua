@@ -54,6 +54,19 @@ export type ActionFeedback = {
 	ballState: string,
 }
 
+export type PlayerActionEffect = {
+	kind: "PlayerAction",
+	matchId: string,
+	arenaId: string,
+	matchRevision: number,
+	actorUserId: number,
+	action: string,
+	mode: string,
+	lateral: number,
+	visualRevision: number,
+	serverTime: number,
+}
+
 export type PlayerStats = {
 	SchemaVersion: number,
 	Wins: number,

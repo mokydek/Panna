@@ -32,6 +32,7 @@ type MatchRecord = {
 	Ended: boolean,
 	GoalDebounce: boolean,
 	RematchVotes: { [Player]: boolean },
+	VisualRevision: number,
 }
 
 export type Service = typeof(setmetatable(
@@ -105,6 +106,11 @@ function MatchService.new(
 	ballService:SetPannaCallback(function(attacker: Player, defender: Player)
 		self:_onPanna(attacker, defender)
 	end)
+	ballService:SetActionCallback(
+		function(actor: Player, action: string, mode: string?, lateral: number?)
+			self:BroadcastPlayerAction(actor, action, mode, lateral)
+		end
+	)
 
 	return self
 end
@@ -240,6 +246,38 @@ function MatchService._effect(self: Service, match: MatchRecord, payload: { [str
 	end
 end
 
+function MatchService.BroadcastPlayerAction(
+	self: Service,
+	actor: Player,
+	action: string,
+	mode: string?,
+	lateral: number?
+)
+	local match = self.byPlayer[actor]
+	if
+		not match
+		or match.Ended
+		or (match.Home ~= actor and match.Away ~= actor)
+		or type(action) ~= "string"
+		or action == ""
+	then
+		return
+	end
+
+	match.VisualRevision += 1
+	self:_effect(match, {
+		kind = "PlayerAction",
+		actorUserId = actor.UserId,
+		action = action,
+		mode = if type(mode) == "string" then mode else "",
+		lateral = if type(lateral) == "number" and lateral == lateral
+			then math.clamp(lateral, -1, 1)
+			else 0,
+		visualRevision = match.VisualRevision,
+		serverTime = serverNow(),
+	})
+end
+
 function MatchService.StartMatch(
 	self: Service,
 	home: Player,
@@ -283,6 +321,7 @@ function MatchService.StartMatch(
 		Ended = false,
 		GoalDebounce = false,
 		RematchVotes = {},
+		VisualRevision = 0,
 	}
 
 	self.matches[matchId] = match
