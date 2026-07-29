@@ -36,8 +36,8 @@ local BINDINGS = table.freeze({
 local TOUCH_TITLES = table.freeze({
 	Kick = "SHOT",
 	Pass = "PASS",
-	Feint = "FEINT",
-	Tackle = "TAKE",
+	Feint = "DRIBBLE",
+	Tackle = "TACKLE",
 	Skill = "PANNA",
 	Shield = "SHIELD",
 	Dash = "DASH",
@@ -1203,13 +1203,13 @@ function InputController._bindActions(self: InputController)
 	end, makeTouchButtons, ACTION_PRIORITY, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
 	ContextActionService:BindActionAtPriority(BINDINGS.Pass, function(_, inputState, input)
 		return self:_onChargeAction("Pass", inputState, input)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.Q, Enum.KeyCode.ButtonX)
+	end, makeTouchButtons, ACTION_PRIORITY, Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonX)
 	ContextActionService:BindActionAtPriority(BINDINGS.Feint, function(_, inputState)
 		return self:_onInstantAction("Feint", inputState)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.V, Enum.KeyCode.ButtonR1)
+	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.Q, Enum.KeyCode.V, Enum.KeyCode.ButtonR1)
 	ContextActionService:BindActionAtPriority(BINDINGS.Tackle, function(_, inputState)
 		return self:_onInstantAction("Tackle", inputState)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.F, Enum.KeyCode.ButtonB)
+	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.E, Enum.KeyCode.F, Enum.KeyCode.ButtonB)
 	ContextActionService:BindActionAtPriority(BINDINGS.Skill, function(_, inputState)
 		return self:_onInstantAction("Skill", inputState)
 	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.R, Enum.KeyCode.ButtonY)

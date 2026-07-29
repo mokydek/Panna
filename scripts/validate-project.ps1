@@ -545,6 +545,69 @@ if ($assetReferences -eq 0) {
     Add-Pass 'No rbxassetid:// references found in source files or JSON.'
 }
 
+$ballServicePath = Join-Path $root 'src/server/BallService.lua'
+if (Test-Path -LiteralPath $ballServicePath -PathType Leaf) {
+    $ballServiceSource = Get-Content -LiteralPath $ballServicePath -Raw
+    $ballServiceMask = (Get-LuauCodeMask -Text $ballServiceSource).Mask
+    $forbiddenBallControlPatterns = @(
+        @{ Name = 'per-frame ball CFrame positioning'; Regex = '\bball\s*\.\s*CFrame\s*=' },
+        @{ Name = 'direct ball Position positioning'; Regex = '\bball\s*\.\s*Position\s*=' },
+        @{ Name = 'ball PivotTo positioning'; Regex = '\bball\s*:\s*PivotTo\s*\(' },
+        @{ Name = 'anchored ball possession'; Regex = '\bball\s*\.\s*Anchored\s*=\s*true\b' },
+        @{ Name = 'direct ball linear-velocity assignment'; Regex = '\bball\s*\.\s*AssemblyLinearVelocity\s*=' },
+        @{ Name = 'direct ball angular-velocity assignment'; Regex = '\bball\s*\.\s*AssemblyAngularVelocity\s*=' }
+    )
+    $forbiddenBallControlCount = 0
+    foreach ($pattern in $forbiddenBallControlPatterns) {
+        if ($ballServiceMask -match [string] $pattern.Regex) {
+            Add-Failure "src/server/BallService.lua contains $($pattern.Name); the canonical ball must remain impulse/force driven and unanchored."
+            $forbiddenBallControlCount += 1
+        }
+    }
+    if ($ballServiceSource -match 'Instance\s*\.\s*new\s*\(\s*["''](?:AlignPosition|AlignOrientation|LinearVelocity|AngularVelocity|BodyPosition|BodyVelocity|BodyGyro|BodyAngularVelocity)["'']\s*\)') {
+        Add-Failure 'src/server/BallService.lua creates a positional/velocity mover; Controlled must use only bounded VectorForce and Torque.'
+        $forbiddenBallControlCount += 1
+    }
+    $requiredPhysicalPatterns = @(
+        @{ Name = 'VectorForce actuator'; Source = $ballServiceSource; Regex = 'Instance\s*\.\s*new\s*\(\s*["'']VectorForce["'']\s*\)' },
+        @{ Name = 'Torque actuator'; Source = $ballServiceSource; Regex = 'Instance\s*\.\s*new\s*\(\s*["'']Torque["'']\s*\)' },
+        @{ Name = 'linear impulse'; Source = $ballServiceMask; Regex = ':\s*ApplyImpulse\s*\(' },
+        @{ Name = 'angular impulse'; Source = $ballServiceMask; Regex = ':\s*ApplyAngularImpulse\s*\(' },
+        @{ Name = 'manual server ownership'; Source = $ballServiceMask; Regex = ':\s*SetNetworkOwner\s*\(\s*nil\s*\)' }
+    )
+    foreach ($requiredPrimitive in $requiredPhysicalPatterns) {
+        if (([string] $requiredPrimitive.Source) -notmatch ([string] $requiredPrimitive.Regex)) {
+            Add-Failure "src/server/BallService.lua is missing required physical primitive '$($requiredPrimitive.Name)'."
+            $forbiddenBallControlCount += 1
+        }
+    }
+    if ($forbiddenBallControlCount -eq 0) {
+        Add-Pass 'BallService keeps the canonical ball unanchored, server-owned, and force/impulse driven.'
+    }
+}
+
+$inputControllerPath = Join-Path $root 'src/client/InputController.lua'
+if (Test-Path -LiteralPath $inputControllerPath -PathType Leaf) {
+    $inputControllerSource = Get-Content -LiteralPath $inputControllerPath -Raw
+    $bindingContracts = @(
+        @{ Action = 'Kick'; Input = 'MouseButton1' },
+        @{ Action = 'Pass'; Input = 'MouseButton2' },
+        @{ Action = 'Feint'; Input = 'KeyCode.Q' },
+        @{ Action = 'Tackle'; Input = 'KeyCode.E' }
+    )
+    $invalidBindingCount = 0
+    foreach ($contract in $bindingContracts) {
+        $pattern = 'BINDINGS\.' + [regex]::Escape([string] $contract.Action) + '[\s\S]{0,320}Enum\.(?:UserInputType\.)?' + [regex]::Escape([string] $contract.Input)
+        if ($inputControllerSource -notmatch $pattern) {
+            Add-Failure "InputController does not bind $($contract.Action) to $($contract.Input) within its action block."
+            $invalidBindingCount += 1
+        }
+    }
+    if ($invalidBindingCount -eq 0) {
+        Add-Pass 'FIFA-style core controls are bound: LMB shot, RMB low pass, Q dribble, E tackle.'
+    }
+}
+
 $robloxArtifacts = @(Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object {
     $relative = (Get-RelativeProjectPath -FullName $_.FullName).Replace('\', '/')
     -not $relative.StartsWith('.git/', [StringComparison]::OrdinalIgnoreCase) -and

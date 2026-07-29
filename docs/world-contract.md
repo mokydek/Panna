@@ -58,7 +58,7 @@ Workspace
 | `Lobby` | `Model` | Общая безопасная стартовая зона |
 | `LobbySpawn` | `SpawnLocation` | Первичное появление и запасной возврат |
 | `QueuePad/QueuePrompt` | `BasePart` + `ProximityPrompt` | Альтернативная общая очередь 1v1 |
-| `TrainingZone` | `Model` | Отдельный тренировочный blockout; не считается матчевой комнатой |
+| `TrainingZone` | `Model` | Отдельный тренировочный blockout; `TrainingBall` — свободная физическая демонстрация без match-control `BallService`, зона не считается матчевой комнатой |
 | `Facilities` | `Model` | Визуальные Shop, Locker, Trophy и Rest-зоны; экономика/инвентарь пока не подключены |
 | `EndLandmark` | `Model` | Видимый ориентир конца улицы |
 
@@ -99,7 +99,7 @@ Workspace
 | `HomeGoal` | `BasePart` | Невидимая геометрия створа/глубины Home; передняя грань задаёт плоскость линии |
 | `AwayGoal` | `BasePart` | Невидимая геометрия створа/глубины Away; передняя грань задаёт плоскость линии |
 | `Bounds` | `BasePart` | Объём sanity-check, изоляции и восстановления мяча |
-| `Ball` | `BasePart` | Единственный авторитетный мяч комнаты: kinematic Anchored в `Controlled`, физический server-owned в остальных состояниях |
+| `Ball` | `BasePart` | Единственный авторитетный мяч комнаты: всегда `Anchored = false` и server-owned; в `Controlled` движение создают ограниченные `VectorForce`/`Torque` |
 | `EntryZone` | `BasePart` | Внешняя зона входа; содержит `EntryPrompt` |
 | `ExitZone` | `BasePart` | Внутренняя зона выхода; содержит `ExitPrompt` |
 | `Barrier` | `BasePart` | Ворота комнаты, открытые в ожидании и закрытые во время матча/результата |
@@ -112,6 +112,8 @@ Workspace
 Служебные объекты должны оставаться **прямыми детьми** `Arena_N`, потому что `ArenaService` ищет их без рекурсивного обхода. `EntryPrompt` и `ExitPrompt` являются прямыми детьми соответствующих зон. В `StatusBoard/Display/Panel` должны существовать `TextLabel` с именами `RoomLabel`, `StateLabel` и `ScoreLabel`; сервис ищет эти labels рекурсивно.
 
 Матчевое ядро (`HomeSpawn`…`Ball`) является жёстким требованием конструктора `ArenaService`. Комнатные зоны сейчас читаются как optional для совместимости со старой картой, но для `PannaDistrict` и `RoomService` считаются обязательными: отсутствующий prompt отключит вход/выход и даст предупреждение сервера.
+
+Начальный `Ball` имеет `ControlModel = "PhysicalForce"`, `BallState = "Reset"`, нулевые owner/last touch/revision и физические дочерние объекты `PannaControlAttachment`, `PannaDribbleForce` (`VectorForce`) и `PannaRollTorque` (`Torque`). Оба actuator в Edit Mode/`Reset` выключены и обнулены; `BallService` переиспользует или восстанавливает этот runtime-контракт и включает их только для `Controlled`. Текущий bake с маркером `PANNA_BAKE_OK` содержит ровно семь `PannaDribbleForce` и семь `PannaRollTorque`: шесть матчевых комплектов и один комплект выключенных объектов у свободного `TrainingBall`.
 
 ### Атрибуты модели комнаты
 
@@ -149,7 +151,7 @@ Free → Waiting → Countdown → Active → Result → Free
 
 ## Геометрия, физика и изоляция
 
-Невидимые маркеры закреплены и не сталкиваются с персонажами/мячом. `Ball` незакреплён и server-owned во всех физических состояниях, но в `Controlled` временно становится `Anchored`: сервер ставит его перед направлением `HumanoidRootPart`, выравнивает по земле raycast-проверкой, ограничивает путь `Spherecast` и обновляет визуальное качение. Legacy `PannaDribbleForce` существует только как выключенный совместимый runtime-объект. При shot/pass/tackle/reset/loss/death/detach мяч обязательно возвращается в незакреплённый server-owned режим. Видимые стойки, сетка, ограждения, трибуны и theme-модели не должны подменять служебные зоны.
+Невидимые маркеры закреплены и не сталкиваются с персонажами/мячом. Матчевый `Ball` остаётся `Anchored = false` и server-owned (`network owner = nil`) во всех состояниях. В `Controlled` сервер строит цель перед направлением `HumanoidRootPart`, выравнивает её по земле raycast-проверкой, превращает ограниченную ошибку позиции/скорости в `PannaDribbleForce` и поддерживает качение через `PannaRollTorque`. `Spherecast` только сокращает физическую цель перед препятствием и никогда не двигает сферу прямой записью transform. При shot/pass/panna/tackle/loss/death/detach actuators выключаются, а действие применяет серверный линейный/угловой импульс; в `Shot`/`Flight`/`Bounce` допускается ограниченная Magnus-подкрутка. Reset авторитетно возвращает мяч на `BallSpawn`. Видимые стойки, сетка, ограждения, трибуны и theme-модели не должны подменять служебные зоны.
 
 У мяча, участников каждой комнаты и остальных игроков назначены отдельные collision groups. Физические столкновения мяча с персонажами намеренно отключены: касание, владение, shield, tackle и финты определяет авторитетная серверная геометрия, чтобы клиентская физика персонажа не могла напрямую толкать мяч. Мяч при этом сталкивается с площадкой и окружением. Периодический scan занятого `Bounds` возвращает постороннего к `StreetSpawn` даже если регистрация collision groups недоступна. Матрицу столкновений, `CanCollide`, `CanTouch`, `CanQuery` и поведение StreamingEnabled всё равно необходимо проверить в многоклиентном Studio-прогоне.
 
@@ -160,7 +162,7 @@ Free → Waiting → Countdown → Active → Result → Free
 - `HomeSpawn.TeamSide = "Home"`, `AwaySpawn.TeamSide = "Away"`;
 - голевые зоны: `TeamSide` и `ArenaId`;
 - `Bounds.ArenaId`;
-- `Ball.ArenaId`, `OwnerUserId`, `LastTouchUserId`;
+- `Ball.ArenaId`, `OwnerUserId`, `LastTouchUserId`, `BallState`, `BallRevision`, `LastAction`, `ControlModel = "PhysicalForce"`;
 - `Barrier.Closed`;
 - комнатные зоны: `ArenaId` и `RoomAction`.
 
@@ -200,7 +202,7 @@ Free → Waiting → Countdown → Active → Result → Free
 
 Builder задаёт светлое дневное освещение (`ClockTime = 14.15`) с повышенной читаемостью теней/мяча и помечает собственные эффекты `PannaDistrictBuilderEffect = true`: `PannaAtmosphere`, `PannaColorGrade`, `PannaNeonBloom` и `PannaSunRays`. Bloom и SunRays намеренно умеренные; чужие эффекты в `Lighting` не удаляются.
 
-Геометрия модульная: повторяющиеся элементы группируются в модели, полосы покрытия и круговая разметка имеют фиксированное число сегментов, а PointLight не отбрасывают динамические тени. Это снижает стоимость blockout, но не заменяет профилирование всех шести комнат, StreamingEnabled, дневных post-effects и LOD на слабом устройстве. Текущий арт/lighting-проход запечён с `PANNA_BAKE_OK` и прошёл структурный Studio smoke; screenshot-review не выполнен, потому что `StudioCaptureService` недоступен в headless `RunScript`.
+Геометрия модульная: повторяющиеся элементы группируются в модели, полосы покрытия и круговая разметка имеют фиксированное число сегментов, а PointLight не отбрасывают динамические тени. Это снижает стоимость blockout, но не заменяет профилирование всех шести комнат, StreamingEnabled, дневных post-effects и LOD на слабом устройстве. Текущий арт/lighting-проход запечён с `PANNA_BAKE_OK` и прошёл структурный Studio smoke вместе с единственным `PannaDistrict`; screenshot-review не выполнен, потому что `StudioCaptureService` недоступен в headless `RunScript`.
 
 ## Ручная арт-карта
 

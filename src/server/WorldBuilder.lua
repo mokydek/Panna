@@ -357,10 +357,28 @@ local function createBall(
 	ball:SetAttribute("BallState", "Reset")
 	ball:SetAttribute("BallRevision", 0)
 	ball:SetAttribute("LastAction", "Reset")
+	ball:SetAttribute("ControlModel", "PhysicalForce")
 
 	local controlAttachment = Instance.new("Attachment")
 	controlAttachment.Name = "PannaControlAttachment"
 	controlAttachment.Parent = ball
+
+	local controlForce = Instance.new("VectorForce")
+	controlForce.Name = "PannaDribbleForce"
+	controlForce.Attachment0 = controlAttachment
+	controlForce.ApplyAtCenterOfMass = true
+	controlForce.RelativeTo = Enum.ActuatorRelativeTo.World
+	controlForce.Force = Vector3.zero
+	controlForce.Enabled = false
+	controlForce.Parent = ball
+
+	local rollTorque = Instance.new("Torque")
+	rollTorque.Name = "PannaRollTorque"
+	rollTorque.Attachment0 = controlAttachment
+	rollTorque.RelativeTo = Enum.ActuatorRelativeTo.World
+	rollTorque.Torque = Vector3.zero
+	rollTorque.Enabled = false
+	rollTorque.Parent = ball
 
 	local trailTop = Instance.new("Attachment")
 	trailTop.Name = "PannaTrailTop"

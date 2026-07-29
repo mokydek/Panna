@@ -48,8 +48,11 @@ for _, functionName in
 		"ChargePower",
 		"DirectionDot",
 		"ClosestPointOnRay",
-		"KinematicControlTarget",
-		"KinematicRollCFrame",
+		"ProjectOnPlane",
+		"RotateHorizontalTowards",
+		"PhysicalControlTarget",
+		"PhysicalControlAcceleration",
+		"MagnusAcceleration",
 	}
 do
 	expect(type(ballMath[functionName]) == "function", "BallMath." .. functionName .. " missing")
@@ -82,47 +85,134 @@ expect(
 	"BallMath.ClosestPointOnRay returned incorrect geometry"
 )
 
-local controlTarget = ballMath.KinematicControlTarget(
-	CFrame.new(10, 5, 20),
-	Vector3.new(10, 0, 17),
-	Vector3.new(0, 0, -1),
-	3,
-	1,
-	1.25,
-	0.09
-)
-expect(controlTarget ~= nil, "kinematic control target rejected valid input")
+local controlTarget =
+	ballMath.PhysicalControlTarget(CFrame.new(10, 5, 20), Vector3.new(0, 0, -1), 3, 1, 1.34)
+expect(controlTarget ~= nil, "physical control target rejected valid input")
 local resolvedControlTarget = controlTarget :: Vector3
 expect(
 	(resolvedControlTarget - Vector3.new(11, 1.34, 17)).Magnitude < 1e-4,
-	"kinematic control target does not stay in front of the player"
+	"physical control target does not stay in front of the player"
 )
 expect(
-	ballMath.KinematicControlTarget(
-		CFrame.new(10, 5, 20),
-		Vector3.new(math.huge, 0, 17),
-		Vector3.new(0, 0, -1),
-		3,
-		0,
-		1.25,
-		0.09
-	) == nil,
-	"kinematic control accepted a non-finite ground point"
+	ballMath.PhysicalControlTarget(CFrame.new(10, 5, 20), Vector3.new(0, 0, -1), 3, 0, math.huge)
+		== nil,
+	"physical control accepted a non-finite target height"
 )
-local rolled =
-	ballMath.KinematicRollCFrame(CFrame.new(0, 1, 0), Vector3.new(0, 1, -2), 1, 1, math.pi)
+local rotated =
+	ballMath.RotateHorizontalTowards(Vector3.new(0, 0, -1), Vector3.new(1, 0, 0), math.pi * 0.25)
+expect(rotated ~= nil, "physical control direction rotation failed")
+local resolvedRotated = rotated :: Vector3
 expect(
-	(rolled.Position - Vector3.new(0, 1, -2)).Magnitude < 1e-4,
-	"kinematic roll lost target position"
+	math.abs(resolvedRotated.Magnitude - 1) < 1e-4 and resolvedRotated:Dot(Vector3.new(1, 0, 0)) > 0,
+	"physical control direction did not rotate along the shortest arc"
 )
-expect(rolled.Rotation ~= CFrame.identity, "kinematic roll did not rotate across travel")
-expect(config.Ball.Dribble.Distance > config.Ball.Radius, "controlled ball distance is invalid")
-expect(config.Ball.Dribble.FollowResponsiveness > 0, "kinematic follow is disabled")
+local projected = ballMath.ProjectOnPlane(Vector3.new(3, 5, 4), Vector3.yAxis)
+expect(projected == Vector3.new(3, 0, 4), "ground-plane projection is incorrect")
 expect(
-	config.Ball.Dribble.MaximumFollowDistance >= config.Ball.Dribble.Distance,
-	"follow snap bound is too small"
+	ballMath.ProjectOnPlane(Vector3.new(math.huge, 0, 0), Vector3.yAxis) == Vector3.zero,
+	"ground-plane projection propagated a non-finite vector"
 )
-expect(config.Ball.Dribble.RotationMultiplier > 0, "controlled ball rotation is disabled")
+local physicalAcceleration = ballMath.PhysicalControlAcceleration(
+	Vector3.zero,
+	Vector3.zero,
+	Vector3.new(2, 0, 0),
+	Vector3.zero,
+	Vector3.yAxis,
+	7,
+	0.95,
+	1,
+	28,
+	118
+)
+expect(physicalAcceleration ~= nil, "physical PD acceleration rejected valid input")
+local resolvedAcceleration = physicalAcceleration :: Vector3
+expect(
+	resolvedAcceleration.X > 0 and resolvedAcceleration.Magnitude <= 118 + 1e-4,
+	"physical PD acceleration is not bounded toward its target"
+)
+local lowDampingSpring = ballMath.PhysicalControlAcceleration(
+	Vector3.zero,
+	Vector3.zero,
+	Vector3.new(1, 0, 0),
+	Vector3.zero,
+	Vector3.yAxis,
+	5,
+	0.4,
+	1,
+	100,
+	1000
+)
+local highDampingSpring = ballMath.PhysicalControlAcceleration(
+	Vector3.zero,
+	Vector3.zero,
+	Vector3.new(1, 0, 0),
+	Vector3.zero,
+	Vector3.yAxis,
+	5,
+	1.4,
+	1,
+	100,
+	1000
+)
+expect(
+	lowDampingSpring ~= nil
+		and highDampingSpring ~= nil
+		and ((lowDampingSpring :: Vector3) - (highDampingSpring :: Vector3)).Magnitude < 1e-4,
+	"PD damping ratio incorrectly changes spring stiffness at rest"
+)
+local positiveCurve =
+	ballMath.MagnusAcceleration(Vector3.new(0, 0, -50), Vector3.new(0, 4, 0), 0.014, 10)
+local negativeCurve =
+	ballMath.MagnusAcceleration(Vector3.new(0, 0, -50), Vector3.new(0, -4, 0), 0.014, 10)
+expect(
+	positiveCurve.Magnitude > 0
+		and negativeCurve.Magnitude > 0
+		and positiveCurve:Dot(negativeCurve) < 0,
+	"Magnus side-spin does not curve in opposite directions"
+)
+local cappedCurve =
+	ballMath.MagnusAcceleration(Vector3.new(0, 0, -100), Vector3.new(0, 100, 0), 0.1, 10)
+expect(math.abs(cappedCurve.Magnitude - 10) < 1e-4, "Magnus acceleration cap is not enforced")
+expect(
+	ballMath.MagnusAcceleration(Vector3.new(math.huge, 0, 0), Vector3.yAxis, 0.1, 10)
+		== Vector3.zero,
+	"Magnus acceleration propagated a non-finite vector"
+)
+expect(ballMath.KinematicControlTarget == nil, "legacy kinematic target still exists")
+expect(ballMath.KinematicRollCFrame == nil, "legacy kinematic roll still exists")
+expect(config.Ball.Dribble.IdleDistance > config.Ball.Radius, "idle control distance is invalid")
+expect(
+	config.Ball.Dribble.ShieldDistance < config.Ball.Dribble.IdleDistance
+		and config.Ball.Dribble.IdleDistance < config.Ball.Dribble.WalkDistance
+		and config.Ball.Dribble.WalkDistance < config.Ball.Dribble.SprintDistance,
+	"physical dribble distances are not ordered"
+)
+expect(config.Ball.Dribble.NaturalFrequency > 0, "physical PD frequency is disabled")
+expect(config.Ball.Dribble.MaximumAccelerationWalk > 0, "physical drive force is disabled")
+expect(config.Ball.Dribble.RollResponsiveness > 0, "physical roll torque is disabled")
+expect(config.Ball.Spin.MagnusCoefficient > 0, "physical side-spin curve is disabled")
+expect(
+	config.Ball.Capture.MaximumControlledBallSpeed >= config.Actions.DashSpeed,
+	"physical owner speed envelope is below DashSpeed"
+)
+expect(
+	config.Ball.Capture.OwnerRearAllowance
+		>= config.Ball.Dribble.IdleDistance
+			* config.Actions.Feint.Variants.DragBack.DistanceMultiplier,
+	"physical DragBack target falls outside owner retention"
+)
+expect(
+	config.Ball.Capture.OwnerFrontDistance < config.Ball.Capture.OwnerBreakRadius,
+	"owner front envelope is shadowed by the radial break limit"
+)
+expect(
+	config.Ball.Capture.AirSettleGraceSeconds >= config.Ball.Capture.ControlGraceSeconds,
+	"air first touch has no physical settle grace"
+)
+expect(
+	config.Security.Movement.MaximumCarrierSpeed >= config.Actions.DashSpeed,
+	"trusted carrier speed cap rejects the server dash"
+)
 expect(config.Ball.ControlRadius == nil, "unused legacy Ball.ControlRadius still exists")
 expect(config.Actions.TackleRadius == nil, "unused legacy Actions.TackleRadius still exists")
 expect(config.Match.MinimumPlayers == nil, "fixed 1v1 Match.MinimumPlayers must not be misleading")
@@ -131,8 +221,8 @@ expect(config.Actions.ShieldMaxSeconds == nil, "duplicate shield duration still 
 expect(config.Ball.Pass.StateSeconds > 0, "pass state duration is missing")
 expect(config.Ball.Shot.MinimumFlightSeconds == nil, "flight timing is still coupled to Shot")
 expect(config.Ball.Limits.MinimumFlightSeconds > 0, "neutral minimum flight duration is missing")
-expect(config.Actions.Tackle.AngularImpulseScale > 0, "tackle spin tuning is missing")
-expect(config.Actions.Panna.AngularImpulseScale > 0, "panna spin tuning is missing")
+expect(config.Actions.Tackle.AngularVelocityScale > 0, "tackle spin tuning is missing")
+expect(config.Actions.Panna.AngularVelocityScale > 0, "panna spin tuning is missing")
 expect(config.Actions.Panna.ShooterRecaptureSeconds > 0, "panna recapture tuning is missing")
 expect(
 	config.Ball.Capture.OwnerBreakRadius
@@ -667,6 +757,7 @@ for _, arena in arenaList do
 	expect(arena.Ball:GetNetworkOwner() == nil, arena.Id .. " ball must remain server-owned")
 	local controlAttachment = arena.Ball:FindFirstChild("PannaControlAttachment")
 	local controlForce = arena.Ball:FindFirstChild("PannaDribbleForce")
+	local rollTorque = arena.Ball:FindFirstChild("PannaRollTorque")
 	local trailTop = arena.Ball:FindFirstChild("PannaTrailTop")
 	local trailBottom = arena.Ball:FindFirstChild("PannaTrailBottom")
 	local speedTrail = arena.Ball:FindFirstChild("PannaSpeedTrail")
@@ -682,6 +773,10 @@ for _, arena in arenaList do
 	)
 	expect(arena.Ball:GetAttribute("LastAction") == "Reset", arena.Id .. " LastAction is invalid")
 	expect(
+		arena.Ball:GetAttribute("ControlModel") == "PhysicalForce",
+		arena.Id .. " physical control identity is missing"
+	)
+	expect(
 		controlAttachment ~= nil and controlAttachment:IsA("Attachment"),
 		arena.Id .. " runtime control attachment missing"
 	)
@@ -689,7 +784,12 @@ for _, arena in arenaList do
 		controlForce ~= nil and controlForce:IsA("VectorForce"),
 		arena.Id .. " runtime control force missing"
 	)
+	expect(
+		rollTorque ~= nil and rollTorque:IsA("Torque"),
+		arena.Id .. " runtime roll torque missing"
+	)
 	local resolvedForce = controlForce :: VectorForce
+	local resolvedTorque = rollTorque :: Torque
 	expect(
 		resolvedForce.Attachment0 == controlAttachment,
 		arena.Id .. " runtime control force attachment is invalid"
@@ -702,7 +802,14 @@ for _, arena in arenaList do
 	expect(resolvedForce.Force.Magnitude < 1e-4, arena.Id .. " control force must start at zero")
 	expect(
 		not resolvedForce.Enabled,
-		arena.Id .. " legacy control force must remain disabled for kinematic possession"
+		arena.Id .. " physical control force must start disabled in Reset"
+	)
+	expect(
+		resolvedTorque.Attachment0 == controlAttachment
+			and resolvedTorque.RelativeTo == Enum.ActuatorRelativeTo.World
+			and resolvedTorque.Torque.Magnitude < 1e-4
+			and not resolvedTorque.Enabled,
+		arena.Id .. " physical roll torque must start disabled in Reset"
 	)
 	expect(trailTop ~= nil and trailTop:IsA("Attachment"), arena.Id .. " trail top missing")
 	expect(
@@ -724,9 +831,141 @@ for _, arena in arenaList do
 	)
 	local state = ballService.states[arena.Id]
 	expect(state.controlForce == resolvedForce, arena.Id .. " runtime state lost control force")
-	expect(state.controlPosition == nil, arena.Id .. " runtime state kept stale control position")
+	expect(state.controlTorque == resolvedTorque, arena.Id .. " runtime state lost roll torque")
+	expect(state.controlDirection == nil, arena.Id .. " runtime state kept stale control direction")
 	expect(state.trail == resolvedTrail, arena.Id .. " runtime state lost speed trail")
 	expect(state.mode == "Reset", arena.Id .. " runtime state must start Reset")
+end
+
+do
+	local state = ballService.states[arenaList[1].Id]
+	local ball = state.arena.Ball
+	state.groundPoint = ball.Position
+		- Vector3.new(
+			0,
+			config.Ball.Radius
+				+ config.Ball.Dribble.HeightOffset
+				+ config.Ball.Dribble.MaximumAirControlHeight
+				+ 1,
+			0
+		)
+	expect(
+		ballServiceModule._controlGraceSeconds(ballService, state)
+			>= config.Ball.Capture.AirSettleGraceSeconds,
+		"high physical first touch did not receive settle grace"
+	)
+	state.groundPoint = nil
+	local character = Instance.new("Model")
+	character.Name = "PhysicalBallSmokeCharacter"
+	local humanoid = Instance.new("Humanoid")
+	humanoid.Parent = character
+	local root = Instance.new("Part")
+	root.Name = "HumanoidRootPart"
+	root.Size = Vector3.new(2, 2, 1)
+	root.Anchored = true
+	root.CanCollide = false
+	root.CFrame = CFrame.lookAt(
+		ball.Position + Vector3.new(0, 1.75, 4),
+		ball.Position + Vector3.new(0, 1.75, 0)
+	)
+	root.Parent = character
+	local owner: any = { UserId = 987654, Character = character }
+	root.AssemblyLinearVelocity = Vector3.new(1_000, 0, 0)
+	local trustedCarrier =
+		ballServiceModule._trustedCarrierVelocity(ballService, owner, root, os.clock())
+	expect(
+		ballMath.IsFiniteVector3(trustedCarrier)
+			and trustedCarrier.Magnitude <= config.Security.Movement.MaximumCarrierSpeed + 1e-4,
+		"carrier velocity reached ball physics without a finite server cap"
+	)
+	root.AssemblyLinearVelocity = Vector3.zero
+	local before = ball.CFrame
+	ballServiceModule._setBallMode(ballService, state, "Controlled", owner, "PhysicalSmoke")
+	expect(not ball.Anchored, "Controlled physically anchored the ball")
+	expect(state.controlForce.Enabled, "Controlled did not enable physical drive force")
+	expect(state.controlTorque.Enabled, "Controlled did not enable physical roll torque")
+	expect(ball.CFrame == before, "Controlled teleported the physical ball")
+	-- RunScript does not advance physics, so seed a finite tangent velocity only
+	-- inside the test harness to exercise the production Torque calculation.
+	ball.AssemblyLinearVelocity = Vector3.new(4, 0, 0)
+	ballServiceModule._updateGround(ballService, state)
+	local beforeDribble = ball.CFrame
+	ballServiceModule._dribble(ballService, state, 1 / 60, os.clock())
+	expect(
+		state.mode == "Controlled" and state.owner == owner,
+		"physical dribble lost valid control"
+	)
+	expect(ball.CFrame == beforeDribble and not ball.Anchored, "physical dribble snapped the ball")
+	expect(
+		Vector3.new(state.controlForce.Force.X, 0, state.controlForce.Force.Z).Magnitude > 0.01,
+		"physical dribble produced no planar drive force"
+	)
+	expect(state.grounded, "physical dribble did not detect the arena surface")
+	expect(state.controlTorque.Torque.Magnitude > 0.01, "physical dribble produced no roll torque")
+	expect(not state.controlDampingPending, "physical first-touch damping was not consumed")
+	ballServiceModule._setBallMode(ballService, state, "Free", nil, "PhysicalReleaseSmoke")
+	expect(not ball.Anchored, "Free left the ball anchored")
+	expect(
+		not state.controlForce.Enabled and state.controlForce.Force.Magnitude < 1e-4,
+		"physical drive force survived release"
+	)
+	expect(
+		not state.controlTorque.Enabled and state.controlTorque.Torque.Magnitude < 1e-4,
+		"physical roll torque survived release"
+	)
+	state.controlForce.Enabled = true
+	state.controlForce.Force = Vector3.new(10, 0, 0)
+	state.controlTorque.Enabled = true
+	state.controlTorque.Torque = Vector3.new(0, 0, 10)
+	ball.Anchored = true
+	ballServiceModule._setBallMode(ballService, state, "Free", nil, nil)
+	expect(
+		not state.controlForce.Enabled
+			and not state.controlTorque.Enabled
+			and not ball.Anchored
+			and state.controlForce.Force.Magnitude < 1e-4
+			and state.controlTorque.Torque.Magnitude < 1e-4,
+		"same-mode reconciliation left physical actuators active"
+	)
+	ballServiceModule._setBallMode(ballService, state, "Controlled", owner, "LaunchSmoke")
+	expect(
+		not ballServiceModule._launch(
+			ballService,
+			state,
+			owner,
+			"InvalidLaunchSmoke",
+			Vector3.new(math.huge, 0, 0),
+			Vector3.zero,
+			owner,
+			0.2,
+			0.1
+		),
+		"physical launch accepted a non-finite target velocity"
+	)
+	local launched = ballServiceModule._launch(
+		ballService,
+		state,
+		owner,
+		"Kick",
+		Vector3.new(30, 4, 0),
+		Vector3.new(0, 3, 8),
+		owner,
+		0.2,
+		0.1
+	)
+	expect(launched, "physical launch rejected a finite impulse")
+	expect(state.mode == "Shot" and not ball.Anchored, "physical launch did not enter Shot")
+	expect(
+		not state.controlForce.Enabled and not state.controlTorque.Enabled,
+		"physical launch kept dribble actuators enabled"
+	)
+	expect(ball:GetNetworkOwner() == nil, "physical launch transferred network ownership")
+	-- Edit-mode RunScript does not advance physics, so impulse response itself is
+	-- covered by the source validator and requires Play/Local Server simulation.
+	ballServiceModule._applySpinPhysics(ballService, state, 0.05)
+	ballServiceModule._setBallMode(ballService, state, "Reset", nil, "Reset")
+	arenas:ResetBall(state.arena)
+	character:Destroy()
 end
 
 local function newMatchHarnessPlayer(name: string, userId: number): (any, Humanoid, Model)

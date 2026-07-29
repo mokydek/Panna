@@ -40,9 +40,10 @@ Rate limit снижает спам, но не доказывает честно�
 
 - Сервер должен иметь возможность исправить невозможную скорость или положение мяча.
 - Перед критическим действием нельзя доверять только позиции, сообщённой клиентом.
-- В `Controlled` матчевый мяч `Anchored`: сервер вычисляет CFrame перед подтверждённым `HumanoidRootPart.LookVector`, опирается на ground raycast и ограничивает swept-перемещение `Workspace:Spherecast`. Payload не содержит доверенной позиции/цели мяча.
-- Legacy `PannaDribbleForce` всегда выключен и не является путём управления. Клиент не может выбирать силу, mover или network owner для владения.
-- При shot/pass/tackle/reset/loss/death/detach общий restore снимает `Anchored`, очищает kinematic state и оставляет network owner `nil`; только затем сервер применяет разрешённый импульс. Передача ownership клиенту потребовала бы отдельного threat model и реальных сетевых тестов.
+- Матчевый мяч всегда сохраняет `Anchored = false` и server network ownership (`SetNetworkOwner(nil)`). В `Controlled` сервер вычисляет цель перед подтверждённым `HumanoidRootPart.LookVector`; ground raycast задаёт высоту, ограниченный PD-контроллер управляет `PannaDribbleForce`, а `PannaRollTorque` поддерживает качение. Payload не содержит доверенной позиции, цели, силы или момента мяча.
+- `Workspace:Spherecast` только сокращает серверную физическую цель перед препятствием. Он не записывает transform мяча, а длительная блокировка приводит к потере контроля; клиент не может выбрать hit, clearance или результат obstacle guard.
+- При shot/pass/tackle/panna/loss/death/detach общий путь выключает и обнуляет `VectorForce`/`Torque`, оставляет network owner `nil` и применяет только серверно рассчитанные линейный/угловой импульсы. Reset отдельно возвращает физический мяч на `BallSpawn`. Передача ownership клиенту потребовала бы отдельного threat model и реальных сетевых тестов.
+- Magnus-подкрутка вычисляется сервером из фактических конечных linear/angular velocity и ограничивается конфигурацией; клиентский `spin` — только нормализованное намерение в разрешённом диапазоне, а не готовое ускорение.
 - Мяч, вышедший ниже разрешённой высоты или за границы, возвращается сервером.
 - Клиентский эффект удара не означает, что удар был принят.
 - Физические столкновения мяча с телами игроков отключены для всех participant/spectator groups: касание, владение и отбор определяет серверная геометрия, поэтому персонаж не может придать мячу невалидный client-owned импульс. Мяч продолжает сталкиваться с окружением арены, а посторонний внутри занятого `Bounds` возвращается на улицу.
@@ -75,7 +76,7 @@ MVP атомарно приобретает lease-lock через `UpdateAsync`,
 До соревновательного релиза нужны отдельные adversarial- и latency-тесты следующих границ:
 
 - movement envelope использует эвристические допуски и серверно наблюдаемую client-owned позицию; его нужно настроить против false positive и постепенного speedhack;
-- server Heartbeat kinematic control, obstacle `Spherecast`, все physical-release ветви и full-sphere goal detector требуют adversarial/latency-проверки; текущий Studio smoke подтверждает только чистые/структурные случаи;
+- текущий Studio CLI smoke подтверждает чистые PD/Magnus bounds, runtime actuator lifecycle, ненулевые рассчитанные force/torque, отсутствие CFrame-snap, release с owner `nil` и full-sphere `GoalMath`, но Edit `RunScript` не шагает физику; фактические Heartbeat PD-follow, отклик `ApplyImpulse`, obstacle `Spherecast`, столкновения и все adversarial/latency-сценарии требуют Play/Local Server;
 - client/server lifecycle reset требует regression-теста на result/exit/death/respawn/rematch, чтобы зависшая локальная кнопка или новый Humanoid не оставались заблокированными;
 - collision groups/eject не проверены с несколькими аренами, respawn, StreamingEnabled и реальными персонажами; при ошибке регистрации групп остаётся только периодический возврат;
 - lease/recovery и shutdown требуют staging-тестов с DataStore throttling, быстрым rejoin и остановкой сервера во время load/save;

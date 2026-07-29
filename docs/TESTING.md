@@ -4,19 +4,19 @@
 
 ## Текущий статус
 
-Для текущего рабочего дерева выполнены статические проверки, четыре существующих Rojo build, дневной bake и Studio CLI smoke. Чистые вычисления, структура сцены и три цикла server cleanup подтверждены. Полный Play/Local Server lifecycle не подтверждён: текущая 4-клиентная попытка снова остановилась на внешней ошибке safety rating локального `universe 0` до подключения четырёх клиентов.
+Для текущего полностью физического контроллера пройдены validator, StyLua/Selene/Luau compile/diff-check, четыре Rojo build, bake и Studio CLI smoke. Последний подтверждает чистые расчёты и runtime lifecycle без шага Roblox-физики. Полный Play/Local Server lifecycle не подтверждён: последняя 4-клиентная попытка остановилась на внешней ошибке safety rating локального `universe 0` до подключения четырёх клиентов.
 
 | Проверка | Статус | Что доказано |
 | --- | --- | --- |
-| Интеграция текущих gameplay/world/lifecycle изменений | **частично подтверждена** | Static/build/bake/Studio smoke пройдены; реальный Play/Local Server lifecycle и сетевое ощущение остаются открытыми |
-| `scripts/validate-project.ps1` | **пройдена: `34 OK / 0 WARN / 0 FAIL`** | Четыре разрешённых внутренних Rojo-профиля, один canonical `default.project.json`, обязательные пути, отсутствие известных сигнатур секретов и эвристический баланс 26 Luau-файлов |
-| StyLua / Selene / Luau compile / `git diff --check` | **пройдены** | Форматирование чистое; Selene: `0 errors / 0 warnings / 0 parse errors`; 26 Luau-файлов компилируются; whitespace-ошибок нет |
-| Четыре существующих внутренних manifest build | **пройдены** | Собраны `default.project.json`, `source.project.json`, `world.project.json` и `multiplayer.project.json`; новых manifests/проектов нет |
-| Roblox Studio CLI `RunScript` | **пройдена, exit code 0** | Маркер `PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6`; текущие daylight/map, GoalMath/kinematic cases, config, revision-scoping эффектов/snapshots и три cleanup-цикла прошли |
-| Запечённая модель Edit Mode | **пройдена с `PANNA_BAKE_OK`** | Обновлён `src/world/PannaDistrict.model.json` и собран canonical place с `BrightDayFootballDistrict`, покрытиями и разметкой |
+| Интеграция полностью физического мяча | **частично подтверждена** | Static/build/bake/Studio smoke пройдены; фактическое сетевое ощущение требует Play/Local Server |
+| `scripts/validate-project.ps1` | **пройдена: `36 OK / 0 WARN / 0 FAIL`** | Разрешённые Rojo-профили, canonical-проект, обязательные пути, secret-patterns и статические физические инварианты |
+| StyLua / Selene / Luau compile / `git diff --check` | **пройдены** | Форматирование, lint, компиляция Luau и whitespace-check завершились без ошибок |
+| Четыре существующих внутренних manifest build | **пройдены, 4/4** | `default`, `source`, `world` и `multiplayer` собраны Rojo с exit code 0 |
+| Roblox Studio CLI `RunScript` | **пройдена, exit code 0** | Маркер `PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6`; pure PD/Magnus и actuator lifecycle подтверждены без шага физики |
+| Запечённая модель Edit Mode | **пройдена с `PANNA_BAKE_OK`** | Единственный `PannaDistrict`; семь `PannaDribbleForce` и семь `PannaRollTorque` для шести арен и `TrainingBall` |
 | Исторический `StudioTestService` Local Server smoke (4 клиента, 2 комнаты) | пройден до переработки мяча | Четыре клиента физически активировали `EntryPrompt`, вошли в две независимые комнаты с разными `MatchId`, получили верные `ArenaId`/`InMatch`, а барьеры закрылись |
 | Текущий расширенный Local Server ball-smoke (4 клиента, 2 комнаты) | **заблокирован внешним запуском Studio** | Ограниченный прогон 120 секунд не подключил четыре клиента; дочерний локальный `universe 0` получил `GetPlaceSafetyInfoFailure`/`provisional rating 500`; нужен приватный staging Place |
-| Kinematic/goal/control чистые regression cases | **пройдены в Studio smoke** | Проверены цели/качение, shield direction, шесть вариантов линии гола, обе перестановки нового/старого матчевого контекста, stale Result/snapshot и три lock→cleanup→unlock цикла; Heartbeat/сеть не симулировались |
+| Physical/goal/control чистые regression cases | **пройдены в Studio smoke** | Проверены bounded PD/Magnus, `VectorForce`/`Torque` lifecycle и ненулевые значения, no-snap, release/ownership, goal/scoping/cleanup; Heartbeat-отклик не симулировался |
 | Полный матч, гол, overtime, панна, disconnect, rematch | **не подтверждены** | Требуется ручной многоклиентный прогон |
 | DataStore load/save в опубликованном staging | **не подтверждён** | Требуется отдельный staging Experience и безопасные тестовые данные |
 | Физические мобильные устройства/геймпад/сетевые условия | **не подтверждены** | Требуются реальные устройства и latency tests |
@@ -59,29 +59,22 @@ GetPlaceSafetyInfoFailure: Failed to get provisional rating for universe 0, erro
 
 ## Текущий подтверждённый Studio CLI smoke
 
-После финальной сборки `scripts/studio-smoke.luau` выполнен официальной задачей Roblox Studio CLI `RunScript` над текущим place. Процесс завершился с exit code 0 и маркером:
+`scripts/studio-smoke.luau` выполнен над текущим запечённым place задачей Roblox Studio CLI `RunScript` и завершился с exit code 0 и маркером:
 
 ```text
 PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6
 ```
 
-Текущий прогон проверил:
+Текущий smoke подтвердил:
 
-1. `ServerScriptService/PannaServer` и `ReplicatedStorage/PannaShared` попали в place через Rojo.
-2. Загружаются `Config`, `BallMath`, `GoalMath`, `EffectScope`, `Net`, `Types`, `WorldBuilder`, `ArenaService`, `RoomService`, `RemoteRegistry`, `RateLimiter`, `PlayerDataService`, `PannaDetector`, `BallService`, `MatchService` и `QueueService`.
-3. `BallMath` отклоняет non-finite значения, вычисляет kinematic target/roll, нормализует направления и проверяет правильную ориентацию shield.
-4. Low/Normal/Chip/Pass дают конечную и монотонно растущую скорость от minimum к maximum charge, не превышают глобальный speed cap; lift Low < Normal < Chip. Геометрические front/side/rear проверки tackle согласованы с Config.
-5. `WorldBuilder.Build` принимает текущий запечённый `PannaDistrict`; проверяются `BrightDayFootballDistrict`, дневные Lighting/SunRays, `ArenaCount = 6`, непрерывная улица и сервисные зоны.
-6. `ArenaService` обнаруживает ровно шесть комнат с уникальными темами Concrete Cage, Neon Futsal, Club House, Industrial, Training Lab и Championship и полным комнатным контрактом.
-7. Каждая арена содержит новое покрытие, touch/penalty lines и читаемые металлические рамы ворот; начальный мяч физический, незакреплённый и server-owned.
-8. `ArenaService:ResetBall` возвращает каждый мяч к `BallSpawn`, обнуляет скорости, owner и last touch.
-9. `BallService.new` создаёт runtime-state; legacy `PannaDribbleForce` присутствует только для совместимости и выключен; `Trail` и атрибуты согласованы с `Reset`.
-10. `GoalMath` отклоняет касание/половину мяча, касание стойки и вход сзади, но принимает полный и быстрый swept-проход.
-11. Матчевые эффекты получают `matchId`/`arenaId`/`matchRevision`; `EffectScope` принимает более новую ревизию при любой очередности каналов и отклоняет старые `Result`, `StateUpdate` и snapshot после начала нового матча.
-12. Три последовательных тестовых lock→cleanup→unlock цикла восстанавливают обоим игрокам `WalkSpeed = 18`, `JumpHeight = 7.2`, `JumpPower = 50`, очищают матчевый контекст и освобождают runtime ровно один раз.
-13. `ActionRequest`, `ActionFeedback`, `QueueRequest`, `StateUpdate`, `Effect` и `GetSnapshot` созданы с ожидаемыми классами.
+1. загрузку текущих `Config`, `BallMath`, `BallService`, `WorldBuilder` и остальных модулей из canonical place;
+2. конечные и ограниченные physical target/PD acceleration, поворот направления, проекцию на поверхность и противоположные направления Magnus-ускорения;
+3. отсутствие старых transform-follow helper-функций и сохранение `Anchored = false` в `Reset`, `Controlled` и action-состояниях;
+4. наличие `PannaDribbleForce`/`PannaRollTorque`, их включение только в `Controlled`, обнуление при выходе и восстановление server network ownership;
+5. отсутствие прямого скачка transform при входе во владение, вызов action-импульса и корректный same-mode runtime reconciliation;
+6. прежние Low/Normal/Chip/Pass, tackle geometry, full-sphere `GoalMath`, дневную карту, шесть комнат, revision-scoping, RemoteRegistry и server cleanup.
 
-Этот smoke не запускает обычный клиентский Play lifecycle и не симулирует Heartbeat-сетевую физику. Фактическое следование `Controlled`, obstacle `Spherecast`, все physical-release ветви и полный матч/реванш всё равно требуют Play/Local Server в доступном staging.
+Edit `RunScript` не запускает обычный клиентский Play lifecycle и не шагает Heartbeat-сетевую физику. Поэтому smoke подтверждает рассчитанные ненулевые `VectorForce`/`Torque`, вызовы release/ownership и чистую математику, но не фактический отклик `ApplyImpulse`, движение PD-follow, obstacle `Spherecast`, первый приём или поведение при latency. Эти области и полный матч/реванш требуют Play/Local Server в доступном staging.
 
 ## Bake для Edit Mode
 
@@ -93,7 +86,7 @@ PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6
 
 Процесс строит place без статического корня через `source.project.json`, запускает `WorldBuilder` в Studio, извлекает детерминированный Rojo JSON в `src/world/PannaDistrict.model.json` и собирает `build/Panna-Football.rbxlx` через основной проект. Для отдельной проверки модели можно выполнить `rojo build world.project.json --output build/PannaDistrict.rbxmx`.
 
-Успех bake определяется маркером `PANNA_BAKE_OK`, а не только существованием выходного файла; текущий дневной bake этот маркер выдал и обновил `src/world/PannaDistrict.model.json`. Финальная автоматическая попытка трёх обзорных PNG не удалась: в headless `RunScript` `StudioCaptureService` трижды не стал доступен до таймаута. Поэтому визуальная структура проверена контрактами Studio smoke, но новый screenshot-review не заявляется пройденным.
+Успех bake определяется маркером `PANNA_BAKE_OK`, а не только существованием выходного файла. Текущий дневной bake выдал этот маркер, обновил `src/world/PannaDistrict.model.json` и запёк в единственный `PannaDistrict` семь `PannaDribbleForce` и семь `PannaRollTorque`: шесть матчевых комплектов и `TrainingBall`. Автоматическая попытка обзорных PNG ранее не удалась из-за недоступности `StudioCaptureService` в headless `RunScript`, поэтому screenshot/device review не заявляется пройденным.
 
 ## Как воспроизвести
 
@@ -151,7 +144,7 @@ if (-not (Select-String -LiteralPath $pannaOutput -SimpleMatch 'PANNA_STUDIO_SMO
 
 ## Что smoke не проверяют
 
-Текущий Studio CLI smoke и исторический room smoke намеренно ограничены и **не доказывают**:
+Текущий Studio CLI smoke и исторический room smoke **не доказывают**:
 
 - полный обычный запуск `init.server.lua` и жизненный цикл сервера;
 - общую очередь и шесть одновременных комнат;
@@ -159,13 +152,15 @@ if (-not (Select-String -LiteralPath $pannaOutput -SimpleMatch 'PANNA_STUDIO_SMO
 - симуляцию Heartbeat, сетевую физику и network ownership во время матча;
 - корректность/матрицу collision groups в многопользовательской физике, возврат посторонних, movement envelope и фактическую длительность Dash;
 - голевой debounce в реальной физике, таймер, overtime или rematch;
-- кинематическое следование мяча перед поворотом владельца, отсутствие дрожания, ground loss и `Spherecast` у стен/бортов;
-- корректный physical release после каждого из shot/pass/tackle/reset/loss/death/detach путей;
+- физическое PD-следование при остановке, ходьбе, спринте, shield, повороте и `Q`-дриблинге, отсутствие устойчивой дрожи/разгона и ground loss;
+- obstacle `Spherecast`, который только сокращает цель, не меняет transform и приводит к безопасной потере владения при блокировке;
+- сохранение `Anchored = false`, server ownership и корректный lifecycle `VectorForce`/`Torque` после каждого из shot/pass/tackle/panna/reset/loss/death/detach путей;
+- физический Trap/первый приём, action-импульсы и противоположная ограниченная Magnus-подкрутка;
 - восстановление Humanoid, камеры, PlayerModule controls, transient input/HUD после результата, выхода, смерти/respawn и двух матчей подряд;
 - full-sphere swept goal crossing в реальном Heartbeat на высокой скорости и у физической геометрии стоек/перекладины;
 - выполнение `PannaDetector:Begin`/`Step`, успешную/ложную панну и отмену кандидата после чужого касания;
 - фактическое выполнение текущей цепочки `ChargeStart → Pass`, ActionFeedback, revisions и malformed-spam защиты в многоклиентном runtime;
-- HUD, ContextActionService, mobile/gamepad UX;
+- бинды ЛКМ/ПКМ/`Q`/`E`, HUD, ContextActionService, mobile/gamepad UX;
 - DataStore, уникальность lease при быстром rejoin, unsafe/recovery после save failure, autosave, `BindToClose` и идемпотентность при реальном отключении.
 
 Для этих областей выполните [ручной тест-план](test-plan.md) и не меняйте их статус на «пройдено» без воспроизводимого отчёта.

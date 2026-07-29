@@ -66,13 +66,13 @@ type BallState = {
 	groundNormal: Vector3,
 	previousGrounded: boolean,
 	lastBoundaryCheck: number,
-	lastPosition: Vector3,
 	ballCollisionGroup: string,
 	participantCollisionGroup: string,
 	controlForce: VectorForce,
-	controlPosition: Vector3?,
-	controlRotation: CFrame?,
-	controlSnapPending: boolean,
+	controlTorque: Torque,
+	controlDirection: Vector3?,
+	controlDampingPending: boolean,
+	controlBlockedSince: number?,
 	trail: Trail,
 }
 
@@ -244,7 +244,7 @@ local function ensureAttachment(ball: BasePart, name: string, position: Vector3)
 	return attachment
 end
 
-local function ensureBallRuntime(ball: BasePart, config: any): (VectorForce, Trail)
+local function ensureBallRuntime(ball: BasePart, config: any): (VectorForce, Torque, Trail)
 	local controlAttachment = ensureAttachment(ball, "PannaControlAttachment", Vector3.zero)
 	local forceInstance = ball:FindFirstChild("PannaDribbleForce")
 	local controlForce: VectorForce
@@ -262,9 +262,24 @@ local function ensureBallRuntime(ball: BasePart, config: any): (VectorForce, Tra
 	controlForce.ApplyAtCenterOfMass = true
 	controlForce.RelativeTo = Enum.ActuatorRelativeTo.World
 	controlForce.Force = Vector3.zero
-	-- Kept as a disabled runtime-contract object for existing places. Controlled
-	-- possession is kinematic and never uses a mover force.
 	controlForce.Enabled = false
+
+	local torqueInstance = ball:FindFirstChild("PannaRollTorque")
+	local controlTorque: Torque
+	if torqueInstance and torqueInstance:IsA("Torque") then
+		controlTorque = torqueInstance
+	else
+		if torqueInstance then
+			torqueInstance:Destroy()
+		end
+		controlTorque = Instance.new("Torque")
+		controlTorque.Name = "PannaRollTorque"
+		controlTorque.Parent = ball
+	end
+	controlTorque.Attachment0 = controlAttachment
+	controlTorque.RelativeTo = Enum.ActuatorRelativeTo.World
+	controlTorque.Torque = Vector3.zero
+	controlTorque.Enabled = false
 
 	local radius = config.Ball.Radius
 	local trailTop = ensureAttachment(ball, "PannaTrailTop", Vector3.new(0, radius * 0.55, 0))
@@ -302,7 +317,7 @@ local function ensureBallRuntime(ball: BasePart, config: any): (VectorForce, Tra
 		NumberSequenceKeypoint.new(0, config.Ball.Trail.WidthStart),
 		NumberSequenceKeypoint.new(1, config.Ball.Trail.WidthEnd),
 	})
-	return controlForce, trail
+	return controlForce, controlTorque, trail
 end
 
 function BallService.new(config: any, arenas: any): Service
@@ -339,7 +354,7 @@ function BallService.new(config: any, arenas: any): Service
 		local ballGroupReady = ensureCollisionGroup(ballCollisionGroup)
 		local participantGroupReady = ensureCollisionGroup(participantCollisionGroup)
 		groupsReady = groupsReady and ballGroupReady and participantGroupReady
-		local controlForce, trail = ensureBallRuntime(arena.Ball, config)
+		local controlForce, controlTorque, trail = ensureBallRuntime(arena.Ball, config)
 		self.states[arena.Id] = {
 			arena = arena,
 			match = nil,
@@ -361,17 +376,18 @@ function BallService.new(config: any, arenas: any): Service
 			groundNormal = Vector3.yAxis,
 			previousGrounded = false,
 			lastBoundaryCheck = 0,
-			lastPosition = arena.Ball.Position,
 			ballCollisionGroup = ballCollisionGroup,
 			participantCollisionGroup = participantCollisionGroup,
 			controlForce = controlForce,
-			controlPosition = nil,
-			controlRotation = nil,
-			controlSnapPending = false,
+			controlTorque = controlTorque,
+			controlDirection = nil,
+			controlDampingPending = false,
+			controlBlockedSince = nil,
 			trail = trail,
 		}
 		arena.Ball.Anchored = false
 		arena.Ball:SetNetworkOwner(nil)
+		arena.Ball:SetAttribute("ControlModel", "PhysicalForce")
 		arena.Ball:SetAttribute("OwnerUserId", 0)
 		arena.Ball:SetAttribute("LastTouchUserId", 0)
 		arena.Ball:SetAttribute("BallState", "Reset")
@@ -654,6 +670,30 @@ function BallService._validateMovement(
 	return true
 end
 
+function BallService._trustedCarrierVelocity(
+	self: Service,
+	player: Player,
+	root: BasePart,
+	now: number
+): Vector3
+	local rawVelocity = root.AssemblyLinearVelocity
+	if not BallMath.IsFiniteVector3(rawVelocity) then
+		return Vector3.zero
+	end
+	local humanoid = getHumanoid(player)
+	local walkSpeed = if humanoid and finiteNumber(humanoid.WalkSpeed)
+		then humanoid.WalkSpeed
+		else 18
+	local allowedSpeed = math.max(20, math.min(walkSpeed + 4, 26))
+	local dash = self.dashes[player]
+	if dash and now <= dash.graceUntil then
+		allowedSpeed = self.config.Actions.DashSpeed + 8
+	end
+	allowedSpeed =
+		math.min(allowedSpeed, math.max(0, self.config.Security.Movement.MaximumCarrierSpeed))
+	return BallMath.ClampMagnitude(Vector3.new(rawVelocity.X, 0, rawVelocity.Z), allowedSpeed)
+end
+
 function BallService._stepDashes(self: Service, now: number)
 	for player, dash in self.dashes do
 		local state = self:_stateForPlayer(player)
@@ -747,37 +787,39 @@ function BallService._feedback(
 	}
 end
 
-function BallService._beginKinematicControl(_self: Service, state: BallState)
+function BallService._beginPhysicalControl(_self: Service, state: BallState, owner: Player)
 	local ball = state.arena.Ball
 	state.controlForce.Force = Vector3.zero
-	state.controlForce.Enabled = false
+	state.controlForce.Enabled = true
+	state.controlTorque.Torque = Vector3.zero
+	state.controlTorque.Enabled = true
 	state.trail.Enabled = false
-
-	if not ball.Anchored then
-		ball:SetNetworkOwner(nil)
-		ball.AssemblyLinearVelocity = Vector3.zero
-		ball.AssemblyAngularVelocity = Vector3.zero
-		ball.Anchored = true
-	end
-	state.controlPosition = ball.Position
-	state.controlRotation = ball.CFrame.Rotation
-	state.controlSnapPending = false
-end
-
-function BallService._restorePhysicalBall(_self: Service, state: BallState)
-	local ball = state.arena.Ball
-	state.controlForce.Force = Vector3.zero
-	state.controlForce.Enabled = false
-	state.controlPosition = nil
-	state.controlRotation = nil
-	state.controlSnapPending = false
-
-	-- Only clear velocity when leaving the anchored control invariant. Other
-	-- physical-to-physical state changes (Shot -> Flight -> Bounce) must retain it.
 	if ball.Anchored then
 		ball.Anchored = false
-		ball.AssemblyLinearVelocity = Vector3.zero
-		ball.AssemblyAngularVelocity = Vector3.zero
+	end
+	ball:SetNetworkOwner(nil)
+	local root = getRoot(owner)
+	local offset = if root then ball.Position - root.Position else Vector3.zero
+	state.controlDirection = if offset.Magnitude > 0.1
+		then safeHorizontalDirection(offset, if root then root.CFrame.LookVector else Vector3.zAxis)
+		else if root
+			then safeHorizontalDirection(root.CFrame.LookVector, Vector3.zAxis)
+			else nil
+	state.controlDampingPending = true
+	state.controlBlockedSince = nil
+end
+
+function BallService._stopPhysicalControl(_self: Service, state: BallState)
+	local ball = state.arena.Ball
+	state.controlForce.Force = Vector3.zero
+	state.controlForce.Enabled = false
+	state.controlTorque.Torque = Vector3.zero
+	state.controlTorque.Enabled = false
+	state.controlDirection = nil
+	state.controlDampingPending = false
+	state.controlBlockedSince = nil
+	if ball.Anchored then
+		ball.Anchored = false
 	end
 	ball:SetNetworkOwner(nil)
 end
@@ -794,6 +836,27 @@ function BallService._setBallMode(
 	local changed = state.mode ~= mode or state.owner ~= owner
 	local actionChanged = lastAction ~= nil and currentAction ~= lastAction
 	if not changed and not actionChanged then
+		if mode == "Controlled" and owner then
+			if
+				ball.Anchored
+				or ball:GetNetworkOwnershipAuto()
+				or ball:GetNetworkOwner() ~= nil
+				or not state.controlForce.Enabled
+				or not state.controlTorque.Enabled
+			then
+				self:_beginPhysicalControl(state, owner)
+			end
+		elseif
+			ball.Anchored
+			or ball:GetNetworkOwnershipAuto()
+			or ball:GetNetworkOwner() ~= nil
+			or state.controlForce.Enabled
+			or state.controlTorque.Enabled
+			or state.controlForce.Force.Magnitude > 0.001
+			or state.controlTorque.Torque.Magnitude > 0.001
+		then
+			self:_stopPhysicalControl(state)
+		end
 		return
 	end
 
@@ -807,9 +870,9 @@ function BallService._setBallMode(
 		self.feints[previousOwner] = nil
 	end
 	if mode == "Controlled" and owner then
-		self:_beginKinematicControl(state)
+		self:_beginPhysicalControl(state, owner)
 	else
-		self:_restorePhysicalBall(state)
+		self:_stopPhysicalControl(state)
 	end
 	if mode ~= "Contested" then
 		state.contestedFirst = nil
@@ -925,7 +988,7 @@ function BallService.ResetMatchBall(self: Service, match: any)
 	end
 	self.pannaDetector:ClearBall(state.arena.Ball)
 	self:_setBallMode(state, "Reset", nil, "Reset")
-	self:_restorePhysicalBall(state)
+	self:_stopPhysicalControl(state)
 	state.lastTouch = nil
 	state.modeUntil = os.clock() + self.config.Ball.ResetHoldSeconds
 	state.recapturePlayer = nil
@@ -939,7 +1002,6 @@ function BallService.ResetMatchBall(self: Service, match: any)
 	state.arena.Ball:SetAttribute("BallRevision", state.revision)
 	state.arena.Ball:SetAttribute("LastAction", "Reset")
 	state.trail.Enabled = false
-	state.lastPosition = state.arena.Ball.Position
 end
 
 function BallService._setOwner(self: Service, state: BallState, player: Player?)
@@ -1071,12 +1133,17 @@ function BallService._hasStrictContact(
 	local capture = self.config.Ball.Capture
 	local localBall = root.CFrame:PointToObjectSpace(ball.Position)
 	local forward = -localBall.Z
+	local isController = state.owner == player and state.mode == "Controlled"
 	local allowedRadius = radius or self.config.Ball.InteractionRadius
 	local allowedHeight = maximumHeight or self.config.Security.Command.MaximumContactHeight
+	local rearAllowance = if isController then capture.OwnerRearAllowance else capture.RearAllowance
+	local lateralDistance = if isController
+		then capture.OwnerLateralDistance
+		else math.max(capture.LateralDistance, allowedRadius * 0.72)
 	local valid = horizontal.Magnitude <= allowedRadius
 		and math.abs(offset.Y) <= allowedHeight
-		and forward >= -capture.RearAllowance
-		and math.abs(localBall.X) <= math.max(capture.LateralDistance, allowedRadius * 0.72)
+		and forward >= -rearAllowance
+		and math.abs(localBall.X) <= lateralDistance
 	return valid, root
 end
 
@@ -1130,12 +1197,26 @@ function BallService._launch(
 	player: Player,
 	action: string,
 	velocity: Vector3,
-	angularImpulse: Vector3,
+	targetAngularVelocity: Vector3,
 	recapturePlayer: Player?,
 	recaptureSeconds: number,
 	shotSeconds: number
-)
+): boolean
 	local ball = state.arena.Ball
+	if
+		not BallMath.IsFiniteVector3(velocity)
+		or not BallMath.IsFiniteVector3(targetAngularVelocity)
+		or not BallMath.IsFiniteVector3(ball.Position)
+		or not BallMath.IsFiniteVector3(ball.AssemblyLinearVelocity)
+		or not BallMath.IsFiniteVector3(ball.AssemblyAngularVelocity)
+		or not finiteNumber(recaptureSeconds)
+		or not finiteNumber(shotSeconds)
+	then
+		if state.match then
+			self:ResetMatchBall(state.match)
+		end
+		return false
+	end
 	local limits = self.config.Ball.Limits
 	local horizontal =
 		BallMath.ClampMagnitude(Vector3.new(velocity.X, 0, velocity.Z), limits.MaximumSpeed)
@@ -1155,9 +1236,16 @@ function BallService._launch(
 	ball:SetAttribute("LastTouchUserId", player.UserId)
 	ball:SetAttribute("LastActionUserId", player.UserId)
 	ball:ApplyImpulse((targetVelocity - ball.AssemblyLinearVelocity) * ball.AssemblyMass)
-	if angularImpulse.Magnitude > 0.01 then
-		ball:ApplyAngularImpulse(angularImpulse * ball.AssemblyMass)
+	if targetAngularVelocity.Magnitude > 0.01 then
+		local radius = math.max(0.05, self.config.Ball.Radius)
+		local moment = 0.4 * ball.AssemblyMass * radius ^ 2
+		local targetAngular = BallMath.ClampMagnitude(
+			targetAngularVelocity,
+			self.config.Ball.Limits.MaximumAngularSpeed
+		)
+		ball:ApplyAngularImpulse((targetAngular - ball.AssemblyAngularVelocity) * moment)
 	end
+	return true
 end
 
 function BallService._executeKick(
@@ -1177,19 +1265,18 @@ function BallService._executeKick(
 	end
 	local speed = settings.SpeedMinimum + (settings.SpeedMaximum - settings.SpeedMinimum) * power
 	local lift = settings.LiftMinimum + (settings.LiftMaximum - settings.LiftMinimum) * power
-	local rootVelocity =
-		Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+	local rootVelocity = self:_trustedCarrierVelocity(player, root, os.clock())
 	local velocity = direction * speed
 		+ rootVelocity * shot.PlayerVelocityCarry
 		+ Vector3.new(0, lift, 0)
 	local rollAxis = Vector3.new(0, 1, 0):Cross(direction)
-	local angular = rollAxis * settings.RollSpin * shot.AngularImpulseScale
+	local angular = rollAxis * settings.RollSpin * shot.AngularVelocityScale
 		+ Vector3.yAxis
 			* math.clamp(spin, -1, 1)
 			* shot.SideSpinMaximum
 			* settings.SideSpinMultiplier
-			* shot.AngularImpulseScale
-	self:_launch(
+			* shot.AngularVelocityScale
+	local launched = self:_launch(
 		state,
 		player,
 		"Kick",
@@ -1199,8 +1286,10 @@ function BallService._executeKick(
 		shot.ShooterRecaptureSeconds,
 		shot.StateSeconds
 	)
-	state.arena.Ball:SetAttribute("LastShotType", shotType)
-	return true
+	if launched then
+		state.arena.Ball:SetAttribute("LastShotType", shotType)
+	end
+	return launched
 end
 
 function BallService._executePass(
@@ -1217,13 +1306,14 @@ function BallService._executePass(
 	local pass = self.config.Ball.Pass
 	local speed = pass.SpeedMinimum + (pass.SpeedMaximum - pass.SpeedMinimum) * power
 	local lift = pass.LiftMinimum + (pass.LiftMaximum - pass.LiftMinimum) * power
-	local rootVelocity =
-		Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+	local rootVelocity = self:_trustedCarrierVelocity(player, root, os.clock())
 	local velocity = direction * speed
 		+ rootVelocity * pass.PlayerVelocityCarry
 		+ Vector3.new(0, lift, 0)
-	local angular = Vector3.new(0, 1, 0):Cross(direction) * pass.RollSpin * pass.AngularImpulseScale
-	self:_launch(
+	local angular = Vector3.new(0, 1, 0):Cross(direction)
+		* pass.RollSpin
+		* pass.AngularVelocityScale
+	return self:_launch(
 		state,
 		player,
 		"Pass",
@@ -1233,7 +1323,22 @@ function BallService._executePass(
 		pass.ShooterRecaptureSeconds,
 		pass.StateSeconds
 	)
-	return true
+end
+
+function BallService._controlGraceSeconds(self: Service, state: BallState): number
+	local graceSeconds = self.config.Ball.Capture.ControlGraceSeconds
+	if not state.groundPoint then
+		return graceSeconds
+	end
+	local dribble = self.config.Ball.Dribble
+	local heightAboveGround = state.arena.Ball.Position.Y
+		- state.groundPoint.Y
+		- self.config.Ball.Radius
+		- dribble.HeightOffset
+	if heightAboveGround > dribble.MaximumAirControlHeight then
+		return math.max(graceSeconds, self.config.Ball.Capture.AirSettleGraceSeconds)
+	end
+	return graceSeconds
 end
 
 function BallService._executeTrap(
@@ -1248,8 +1353,8 @@ function BallService._executeTrap(
 	end
 	local ball = state.arena.Ball
 	self:_setBallMode(state, "Controlled", player, "Trap")
-	state.controlSnapPending = true
-	state.controlGraceUntil = os.clock() + self.config.Ball.Capture.ControlGraceSeconds
+	state.controlDampingPending = true
+	state.controlGraceUntil = os.clock() + self:_controlGraceSeconds(state)
 	state.lastTouch = player
 	ball:SetAttribute("LastTouchUserId", player.UserId)
 	ball:SetAttribute("LastActionUserId", player.UserId)
@@ -1655,17 +1760,25 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		local contactDirection = safeHorizontalDirection(ballHorizontal, resolvedDirection)
 			or resolvedDirection
 		local launchDirection = (contactDirection * 0.65 + resolvedDirection * 0.35).Unit
-		self:_launch(
+		local launched = self:_launch(
 			state,
 			player,
 			"Tackle",
 			launchDirection * tackle.ImpulseSpeed + Vector3.new(0, tackle.Lift, 0),
-			Vector3.new(0, 1, 0):Cross(launchDirection) * tackle.AngularImpulseScale,
+			Vector3.new(0, 1, 0):Cross(launchDirection) * tackle.AngularVelocityScale,
 			other,
 			tackle.ReleaseSeconds,
 			tackle.ReleaseSeconds
 		)
-		return self:_feedback(state, true, true, "Executed", action, sequence, cooldown)
+		return self:_feedback(
+			state,
+			launched,
+			launched,
+			if launched then "Executed" else "InvalidPhysicsState",
+			action,
+			sequence,
+			cooldown
+		)
 	end
 
 	if action == "Feint" then
@@ -1751,17 +1864,25 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		if not self.pannaDetector:Begin(player, other, state.arena.Ball) then
 			return self:_feedback(state, false, false, "PannaUnavailable", action, sequence, 0)
 		end
-		self:_launch(
+		local launched = self:_launch(
 			state,
 			player,
 			"Skill",
 			resolvedDirection * panna.Speed + Vector3.new(0, panna.Lift, 0),
-			Vector3.new(0, 1, 0):Cross(resolvedDirection) * panna.AngularImpulseScale,
+			Vector3.new(0, 1, 0):Cross(resolvedDirection) * panna.AngularVelocityScale,
 			player,
 			panna.ShooterRecaptureSeconds,
 			panna.ReleaseSeconds
 		)
-		return self:_feedback(state, true, true, "Executed", action, sequence, cooldown)
+		return self:_feedback(
+			state,
+			launched,
+			launched,
+			if launched then "Executed" else "InvalidPhysicsState",
+			action,
+			sequence,
+			cooldown
+		)
 	end
 
 	return self:_feedback(state, false, false, "UnknownAction", action, sequence, 0)
@@ -1805,11 +1926,10 @@ function BallService._candidateScore(
 	local capture = self.config.Ball.Capture
 	local firstTouch = self.config.Ball.FirstTouch
 	local hasBuffer = state.buffered[player] ~= nil
+	local isController = state.owner == player and state.mode == "Controlled"
 	local radius = if hasBuffer
 		then firstTouch.Radius
-		else if state.owner == player and state.mode == "Controlled"
-			then capture.OwnerBreakRadius
-			else capture.Radius
+		else if isController then capture.OwnerBreakRadius else capture.Radius
 	local maximumHeight = if hasBuffer then firstTouch.MaximumHeight else capture.MaximumHeight
 	local offset = ball.Position - root.Position
 	local horizontal = Vector3.new(offset.X, 0, offset.Z)
@@ -1818,30 +1938,34 @@ function BallService._candidateScore(
 	end
 	local localBall = root.CFrame:PointToObjectSpace(ball.Position)
 	local forward = -localBall.Z
+	local rearAllowance = if isController then capture.OwnerRearAllowance else capture.RearAllowance
+	local frontDistance = if isController then capture.OwnerFrontDistance else capture.FrontDistance
+	local lateralDistance = if isController
+		then capture.OwnerLateralDistance
+		else capture.LateralDistance
 	if
-		forward < -capture.RearAllowance
-		or forward > capture.FrontDistance
-		or math.abs(localBall.X) > capture.LateralDistance
+		forward < -rearAllowance
+		or forward > frontDistance
+		or math.abs(localBall.X) > lateralDistance
 	then
 		return nil
 	end
 	local ballSpeed = ball.AssemblyLinearVelocity.Magnitude
-	local maximumSpeed = if hasBuffer then firstTouch.HardSpeed else capture.MaximumBallSpeed
+	local maximumSpeed = if hasBuffer
+		then firstTouch.HardSpeed
+		else if isController
+			then capture.MaximumControlledBallSpeed
+			else capture.MaximumBallSpeed
 	if ballSpeed > maximumSpeed then
 		return nil
 	end
 
 	local distanceScore = 1 - math.clamp(horizontal.Magnitude / math.max(0.1, radius), 0, 1)
-	local frontScore = math.clamp(
-		(forward + capture.RearAllowance)
-			/ math.max(0.1, capture.FrontDistance + capture.RearAllowance),
-		0,
-		1
-	)
+	local frontScore =
+		math.clamp((forward + rearAllowance) / math.max(0.1, frontDistance + rearAllowance), 0, 1)
 	local approachScore = 0
 	if horizontal.Magnitude > 0.05 then
-		local rootVelocity =
-			Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+		local rootVelocity = self:_trustedCarrierVelocity(player, root, now)
 		approachScore = math.clamp(
 			rootVelocity:Dot(horizontal.Unit) / math.max(0.1, capture.ApproachSpeed),
 			0,
@@ -1851,8 +1975,11 @@ function BallService._candidateScore(
 	local score = distanceScore * capture.DistanceWeight
 		+ frontScore * capture.FrontWeight
 		+ approachScore * capture.ApproachWeight
-	if state.owner == player and now <= state.controlGraceUntil then
+	if isController then
 		score += capture.OwnerRetentionBonus
+	end
+	if isController and now <= state.controlGraceUntil then
+		score += capture.ControlGraceBonus
 	end
 	if hasBuffer then
 		score += firstTouch.BufferedScoreBonus
@@ -1867,7 +1994,7 @@ function BallService._applyFirstTouch(self: Service, state: BallState, player: P
 	end
 	local ball = state.arena.Ball
 	self:_setBallMode(state, "Controlled", player, "FirstTouch")
-	state.controlGraceUntil = now + self.config.Ball.Capture.ControlGraceSeconds
+	state.controlGraceUntil = now + self:_controlGraceSeconds(state)
 	state.lastTouch = player
 	ball:SetAttribute("LastTouchUserId", player.UserId)
 	ball:SetAttribute("LastActionUserId", player.UserId)
@@ -1980,10 +2107,10 @@ function BallService._feintTarget(
 		direction = rotation:VectorToWorldSpace(baseDirection)
 		lateral = settings.LateralDistance * lateralSign * math.sin(progress * math.pi)
 	end
-	return direction, lateral, settings.DistanceMultiplier, settings.FollowResponsivenessMultiplier
+	return direction, lateral, settings.DistanceMultiplier, settings.ControlAccelerationMultiplier
 end
 
-function BallService._loseKinematicControl(
+function BallService._loseControl(
 	self: Service,
 	state: BallState,
 	owner: Player,
@@ -1995,17 +2122,54 @@ function BallService._loseKinematicControl(
 	self:_setBallMode(state, "Free", nil, reason)
 end
 
+function BallService._dampCapturedBall(self: Service, state: BallState, carrierVelocity: Vector3)
+	if not state.controlDampingPending then
+		return
+	end
+	state.controlDampingPending = false
+	local ball = state.arena.Ball
+	local dribble = self.config.Ball.Dribble
+	local velocity = ball.AssemblyLinearVelocity
+	local delta = Vector3.new(
+		(carrierVelocity.X * dribble.VelocityCarry - velocity.X) * dribble.CaptureHorizontalDamping,
+		-velocity.Y * dribble.CaptureVerticalDamping,
+		(carrierVelocity.Z * dribble.VelocityCarry - velocity.Z) * dribble.CaptureHorizontalDamping
+	)
+	delta = BallMath.ClampMagnitude(delta, dribble.MaximumCaptureDeltaSpeed)
+	if BallMath.IsFiniteVector3(delta) and delta.Magnitude > 0.01 then
+		ball:ApplyImpulse(delta * ball.AssemblyMass)
+	end
+end
+
+function BallService._updateRollAssist(self: Service, state: BallState, groundNormal: Vector3)
+	local torque = state.controlTorque
+	if not state.grounded or groundNormal.Magnitude < 0.05 then
+		torque.Torque = Vector3.zero
+		return
+	end
+	local ball = state.arena.Ball
+	local dribble = self.config.Ball.Dribble
+	local normal = groundNormal.Unit
+	local tangentVelocity = BallMath.ProjectOnPlane(ball.AssemblyLinearVelocity, normal)
+	local desiredAngular = normal:Cross(tangentVelocity) / math.max(0.05, self.config.Ball.Radius)
+	local currentAngular = BallMath.ProjectOnPlane(ball.AssemblyAngularVelocity, normal)
+	local moment = 0.4 * ball.AssemblyMass * self.config.Ball.Radius ^ 2
+	local desiredTorque = (desiredAngular - currentAngular) * moment * dribble.RollResponsiveness
+	torque.Torque =
+		BallMath.ClampMagnitude(desiredTorque, moment * dribble.MaximumRollAngularAcceleration)
+end
+
 function BallService._dribble(self: Service, state: BallState, deltaTime: number, now: number)
 	local owner = state.owner
 	state.controlForce.Force = Vector3.zero
-	state.controlForce.Enabled = false
+	state.controlTorque.Torque = Vector3.zero
 	if not owner or state.mode ~= "Controlled" then
 		return
 	end
 	local root = getRoot(owner)
 	local humanoid = getHumanoid(owner)
 	if not root or not humanoid or humanoid.Health <= 0 then
-		self:_loseKinematicControl(state, owner, now, "ControllerUnavailable")
+		self:_loseControl(state, owner, now, "ControllerUnavailable")
 		return
 	end
 
@@ -2013,30 +2177,40 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 	local shield = self:_activeShield(state, owner, now)
 	local facing = safeHorizontalDirection(root.CFrame.LookVector, root.CFrame.LookVector)
 	if not facing then
-		self:_loseKinematicControl(state, owner, now, "ControlDirectionLost")
+		self:_loseControl(state, owner, now, "ControlDirectionLost")
 		return
 	end
-	local feintDirection, lateralOffset, feintDistanceMultiplier, feintFollowMultiplier =
+	local feintDirection, lateralOffset, feintDistanceMultiplier, feintAccelerationMultiplier =
 		self:_feintTarget(owner, facing, now)
-	local rootHorizontalVelocity =
-		Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
-	local sprintMultiplier = if rootHorizontalVelocity.Magnitude >= dribble.SprintSpeed
-		then dribble.SprintDistanceMultiplier
-		else 1
-	local distanceMultiplier = sprintMultiplier
-		* (if shield then dribble.ShieldDistanceMultiplier else 1)
-		* feintDistanceMultiplier
-	local flatTarget = BallMath.KinematicControlTarget(
-		root.CFrame,
-		Vector3.zero,
+	local controlDirection = BallMath.RotateHorizontalTowards(
+		state.controlDirection or facing,
 		feintDirection,
-		dribble.Distance * distanceMultiplier,
+		math.rad(dribble.DirectionTurnRateDegrees) * math.clamp(deltaTime, 0, 0.1)
+	)
+	if not controlDirection then
+		self:_loseControl(state, owner, now, "ControlDirectionLost")
+		return
+	end
+	state.controlDirection = controlDirection
+	local carrierVelocity = self:_trustedCarrierVelocity(owner, root, now)
+	local rootSpeed = carrierVelocity.Magnitude
+	local sprinting = rootSpeed >= dribble.SprintSpeed
+	local baseDistance = if shield
+		then dribble.ShieldDistance
+		else if sprinting
+			then dribble.SprintDistance
+			else if rootSpeed >= dribble.WalkSpeedThreshold
+				then dribble.WalkDistance
+				else dribble.IdleDistance
+	local flatTarget = BallMath.PhysicalControlTarget(
+		root.CFrame,
+		controlDirection,
+		baseDistance * feintDistanceMultiplier,
 		lateralOffset,
-		self.config.Ball.Radius,
-		0
+		root.Position.Y
 	)
 	if not flatTarget then
-		self:_loseKinematicControl(state, owner, now, "ControlTargetLost")
+		self:_loseControl(state, owner, now, "ControlTargetLost")
 		return
 	end
 	local probeOrigin =
@@ -2047,75 +2221,137 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 		groundRaycastParams(state)
 	)
 	if not ground or ground.Normal.Y < dribble.GroundNormalMinimumY then
-		self:_loseKinematicControl(state, owner, now, "ControlGroundLost")
+		self:_loseControl(state, owner, now, "ControlGroundLost")
 		return
 	end
-	local target = BallMath.KinematicControlTarget(
+	local target = BallMath.PhysicalControlTarget(
 		root.CFrame,
-		ground.Position,
-		feintDirection,
-		dribble.Distance * distanceMultiplier,
+		controlDirection,
+		baseDistance * feintDistanceMultiplier,
 		lateralOffset,
-		self.config.Ball.Radius,
-		dribble.HeightOffset
+		ground.Position.Y + self.config.Ball.Radius + dribble.HeightOffset
 	)
 	if not target then
-		self:_loseKinematicControl(state, owner, now, "ControlTargetLost")
+		self:_loseControl(state, owner, now, "ControlTargetLost")
 		return
 	end
 	local ball = state.arena.Ball
-	if not ball.Anchored then
-		self:_beginKinematicControl(state)
+	local targetError = BallMath.ProjectOnPlane(target - ball.Position, ground.Normal)
+	local heightAboveGround = ball.Position.Y
+		- ground.Position.Y
+		- self.config.Ball.Radius
+		- dribble.HeightOffset
+	self:_dampCapturedBall(state, carrierVelocity)
+	if
+		(
+			targetError.Magnitude > dribble.MaximumTargetError
+			or heightAboveGround > dribble.MaximumAirControlHeight
+		) and now > state.controlGraceUntil
+	then
+		self:_loseControl(state, owner, now, "ControlRangeLost")
+		return
 	end
-	local current = state.controlPosition or ball.Position
-	local horizontalDelta = Vector3.new(target.X - current.X, 0, target.Z - current.Z)
-	local nextPosition: Vector3
-	if state.controlSnapPending or horizontalDelta.Magnitude >= dribble.MaximumFollowDistance then
-		nextPosition = target
-	else
-		local responsiveness = dribble.FollowResponsiveness
-			* feintFollowMultiplier
-			* (if shield then dribble.ShieldFollowResponsivenessMultiplier else 1)
-		local alpha = 1 - math.exp(-math.max(0, responsiveness) * math.clamp(deltaTime, 0, 0.1))
-		nextPosition = Vector3.new(
-			current.X + horizontalDelta.X * alpha,
-			target.Y,
-			current.Z + horizontalDelta.Z * alpha
-		)
+	if ball.Anchored or not state.controlForce.Enabled or not state.controlTorque.Enabled then
+		self:_beginPhysicalControl(state, owner)
 	end
-	local controlTravel = nextPosition - current
+
+	local controlTravel = Vector3.new(target.X - ball.Position.X, 0, target.Z - ball.Position.Z)
 	if controlTravel.Magnitude >= 1e-4 then
 		local obstacle = Workspace:Spherecast(
-			current,
+			ball.Position,
 			self.config.Ball.Radius * dribble.ObstacleRadiusScale,
 			controlTravel,
 			groundRaycastParams(state)
 		)
 		if obstacle then
 			local allowedDistance = math.max(0, obstacle.Distance - dribble.ObstacleClearance)
-			nextPosition = current
+			local allowedTarget = ball.Position
 				+ controlTravel.Unit * math.min(controlTravel.Magnitude, allowedDistance)
+			target = Vector3.new(allowedTarget.X, target.Y, allowedTarget.Z)
+			if allowedDistance <= dribble.ObstacleClearance + 0.05 then
+				state.controlBlockedSince = state.controlBlockedSince or now
+			else
+				state.controlBlockedSince = nil
+			end
+		else
+			state.controlBlockedSince = nil
 		end
+	else
+		state.controlBlockedSince = nil
 	end
-	state.controlSnapPending = false
-	local currentCFrame = CFrame.new(current) * (state.controlRotation or ball.CFrame.Rotation)
-	local nextCFrame = BallMath.KinematicRollCFrame(
-		currentCFrame,
-		nextPosition,
-		self.config.Ball.Radius,
-		dribble.RotationMultiplier,
-		dribble.MaximumRotationRadiansPerStep
+	if
+		state.controlBlockedSince
+		and now - state.controlBlockedSince >= dribble.BlockedLossSeconds
+	then
+		self:_loseControl(state, owner, now, "ControlBlocked")
+		return
+	end
+
+	local maximumAcceleration = if sprinting
+		then dribble.MaximumAccelerationSprint
+		else dribble.MaximumAccelerationWalk
+	maximumAcceleration *= feintAccelerationMultiplier * (if shield
+		then dribble.ShieldAccelerationMultiplier
+		else 1)
+	local acceleration = BallMath.PhysicalControlAcceleration(
+		ball.Position,
+		ball.AssemblyLinearVelocity,
+		target,
+		carrierVelocity,
+		ground.Normal,
+		dribble.NaturalFrequency,
+		dribble.DampingRatio,
+		dribble.VelocityCarry,
+		dribble.MaximumCorrectionSpeed,
+		maximumAcceleration
 	)
-	state.controlPosition = nextPosition
-	state.controlRotation = nextCFrame.Rotation
-	ball.CFrame = nextCFrame
-	ball.AssemblyLinearVelocity = Vector3.zero
-	ball.AssemblyAngularVelocity = Vector3.zero
-	state.grounded = true
-	state.groundPoint = ground.Position
-	state.groundNormal = ground.Normal
+	if not acceleration then
+		self:_loseControl(state, owner, now, "ControlForceInvalid")
+		return
+	end
+	if not state.grounded then
+		acceleration *= dribble.AirControlMultiplier
+	end
+	if acceleration.Magnitude < dribble.ForceDeadZone then
+		acceleration = Vector3.zero
+	end
+	local adhesion = if state.grounded
+		then -ground.Normal.Unit * dribble.GroundAdhesionAcceleration
+		else Vector3.zero
+	state.controlForce.Force = (acceleration + adhesion) * ball.AssemblyMass
+	state.controlForce.Enabled = true
+	state.controlTorque.Enabled = true
+	self:_updateRollAssist(state, ground.Normal)
 	ball:SetAttribute("LastTouchUserId", owner.UserId)
 	state.lastTouch = owner
+end
+
+function BallService._applySpinPhysics(self: Service, state: BallState, deltaTime: number)
+	if state.mode ~= "Shot" and state.mode ~= "Flight" and state.mode ~= "Bounce" then
+		return
+	end
+	local ball = state.arena.Ball
+	local spin = self.config.Ball.Spin
+	local horizontalSpeed =
+		Vector3.new(ball.AssemblyLinearVelocity.X, 0, ball.AssemblyLinearVelocity.Z).Magnitude
+	if
+		horizontalSpeed < spin.MinimumCurveSpeed
+		or math.abs(ball.AssemblyAngularVelocity.Y) < spin.MinimumYawRate
+	then
+		return
+	end
+	local acceleration = BallMath.MagnusAcceleration(
+		ball.AssemblyLinearVelocity,
+		ball.AssemblyAngularVelocity,
+		spin.MagnusCoefficient,
+		spin.MaximumCurveAcceleration
+	)
+	if state.grounded then
+		acceleration *= spin.GroundCurveMultiplier
+	end
+	if acceleration.Magnitude > 0.001 then
+		ball:ApplyImpulse(acceleration * ball.AssemblyMass * math.clamp(deltaTime, 0, 0.1))
+	end
 end
 
 function BallService._stepMode(self: Service, state: BallState, now: number)
@@ -2157,7 +2393,10 @@ function BallService._enforceBallLimits(self: Service, state: BallState)
 		end
 		return
 	end
-	if ball:GetNetworkOwner() ~= nil then
+	if ball.Anchored then
+		ball.Anchored = false
+	end
+	if ball:GetNetworkOwnershipAuto() or ball:GetNetworkOwner() ~= nil then
 		ball:SetNetworkOwner(nil)
 	end
 	local velocity = ball.AssemblyLinearVelocity
@@ -2171,12 +2410,13 @@ function BallService._enforceBallLimits(self: Service, state: BallState)
 		)
 	limitedVelocity = BallMath.ClampMagnitude(limitedVelocity, limits.MaximumSpeed)
 	if (limitedVelocity - velocity).Magnitude > 0.01 then
-		ball.AssemblyLinearVelocity = limitedVelocity
+		ball:ApplyImpulse((limitedVelocity - velocity) * ball.AssemblyMass)
 	end
 	local angular =
 		BallMath.ClampMagnitude(ball.AssemblyAngularVelocity, limits.MaximumAngularSpeed)
 	if (angular - ball.AssemblyAngularVelocity).Magnitude > 0.01 then
-		ball.AssemblyAngularVelocity = angular
+		local moment = 0.4 * ball.AssemblyMass * self.config.Ball.Radius ^ 2
+		ball:ApplyAngularImpulse((angular - ball.AssemblyAngularVelocity) * moment)
 	end
 	local speed = limitedVelocity.Magnitude
 	if not state.trail.Enabled and speed >= self.config.Ball.Trail.EnabledSpeed then
@@ -2184,7 +2424,6 @@ function BallService._enforceBallLimits(self: Service, state: BallState)
 	elseif state.trail.Enabled and speed <= self.config.Ball.Trail.DisabledSpeed then
 		state.trail.Enabled = false
 	end
-	state.lastPosition = ball.Position
 end
 
 function BallService._enforceBounds(self: Service, state: BallState)
@@ -2246,10 +2485,21 @@ function BallService._step(self: Service, deltaTime: number)
 			if state.mode == "Controlled" and state.owner ~= previousController then
 				self:_dribble(state, deltaTime, now)
 			end
+			self:_applySpinPhysics(state, deltaTime)
 			self:_enforceBallLimits(state)
 			self:_enforceBounds(state)
 		else
-			state.controlForce.Force = Vector3.zero
+			if
+				ball.Anchored
+				or state.controlForce.Enabled
+				or state.controlTorque.Enabled
+				or state.controlForce.Force.Magnitude > 0.001
+				or state.controlTorque.Torque.Magnitude > 0.001
+				or ball:GetNetworkOwnershipAuto()
+				or ball:GetNetworkOwner() ~= nil
+			then
+				self:_stopPhysicalControl(state)
+			end
 			state.trail.Enabled = false
 		end
 		ownersByBall[ball] = state.owner
