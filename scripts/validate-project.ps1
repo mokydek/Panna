@@ -412,6 +412,7 @@ $requiredPaths = @(
     'src/server/PannaDetector.lua',
     'src/client/init.client.lua',
     'src/client/EffectScope.lua',
+    'src/client/ControlCatalog.lua',
     'src/client/UIController.lua',
     'src/client/InputController.lua',
     'src/world/PannaDistrict.model.json',
@@ -555,12 +556,13 @@ if (Test-Path -LiteralPath $ballServicePath -PathType Leaf) {
         @{ Name = 'ball PivotTo positioning'; Regex = '\bball\s*:\s*PivotTo\s*\(' },
         @{ Name = 'anchored ball possession'; Regex = '\bball\s*\.\s*Anchored\s*=\s*true\b' },
         @{ Name = 'direct ball linear-velocity assignment'; Regex = '\bball\s*\.\s*AssemblyLinearVelocity\s*=' },
-        @{ Name = 'direct ball angular-velocity assignment'; Regex = '\bball\s*\.\s*AssemblyAngularVelocity\s*=' }
+        @{ Name = 'direct ball angular-velocity assignment'; Regex = '\bball\s*\.\s*AssemblyAngularVelocity\s*=' },
+        @{ Name = 'server-side reliance on non-replicated MoveDirection'; Regex = '\.\s*MoveDirection\b' }
     )
     $forbiddenBallControlCount = 0
     foreach ($pattern in $forbiddenBallControlPatterns) {
         if ($ballServiceMask -match [string] $pattern.Regex) {
-            Add-Failure "src/server/BallService.lua contains $($pattern.Name); the canonical ball must remain impulse/force driven and unanchored."
+            Add-Failure "src/server/BallService.lua contains $($pattern.Name); canonical control must remain server-observable, impulse/force driven, and unanchored."
             $forbiddenBallControlCount += 1
         }
     }
@@ -587,24 +589,66 @@ if (Test-Path -LiteralPath $ballServicePath -PathType Leaf) {
 }
 
 $inputControllerPath = Join-Path $root 'src/client/InputController.lua'
-if (Test-Path -LiteralPath $inputControllerPath -PathType Leaf) {
+$controlCatalogPath = Join-Path $root 'src/client/ControlCatalog.lua'
+$uiControllerPath = Join-Path $root 'src/client/UIController.lua'
+if ((Test-Path -LiteralPath $inputControllerPath -PathType Leaf) -and (Test-Path -LiteralPath $controlCatalogPath -PathType Leaf)) {
     $inputControllerSource = Get-Content -LiteralPath $inputControllerPath -Raw
+    $controlCatalogSource = Get-Content -LiteralPath $controlCatalogPath -Raw
     $bindingContracts = @(
-        @{ Action = 'Kick'; Input = 'MouseButton1' },
-        @{ Action = 'Pass'; Input = 'MouseButton2' },
-        @{ Action = 'Feint'; Input = 'KeyCode.Q' },
-        @{ Action = 'Tackle'; Input = 'KeyCode.E' }
+        @{ Action = 'Kick'; Inputs = @('Enum.UserInputType.MouseButton1', 'Enum.KeyCode.ButtonR2') },
+        @{ Action = 'Pass'; Inputs = @('Enum.UserInputType.MouseButton2', 'Enum.KeyCode.ButtonX') },
+        @{ Action = 'Feint'; Inputs = @('Enum.KeyCode.Q', 'Enum.KeyCode.ButtonR1') },
+        @{ Action = 'Tackle'; Inputs = @('Enum.KeyCode.E', 'Enum.KeyCode.ButtonB') },
+        @{ Action = 'Skill'; Inputs = @('Enum.KeyCode.R', 'Enum.KeyCode.ButtonY') },
+        @{ Action = 'Shield'; Inputs = @('Enum.KeyCode.C', 'Enum.KeyCode.ButtonL2') },
+        @{ Action = 'Dash'; Inputs = @('Enum.KeyCode.X', 'Enum.KeyCode.ButtonL1') },
+        @{ Action = 'ShotMode'; Inputs = @('Enum.KeyCode.Z', 'Enum.KeyCode.DPadUp') }
     )
     $invalidBindingCount = 0
     foreach ($contract in $bindingContracts) {
-        $pattern = 'BINDINGS\.' + [regex]::Escape([string] $contract.Action) + '[\s\S]{0,320}Enum\.(?:UserInputType\.)?' + [regex]::Escape([string] $contract.Input)
-        if ($inputControllerSource -notmatch $pattern) {
-            Add-Failure "InputController does not bind $($contract.Action) to $($contract.Input) within its action block."
+        $definitionPattern = '(?s)\b' + [regex]::Escape([string] $contract.Action) + '\s*=\s*table\.freeze\s*\(\s*\{(?<Body>.*?inputs\s*=\s*table\.freeze\s*\(\s*\{.*?\}\s*\))'
+        $definitionMatch = [regex]::Match($controlCatalogSource, $definitionPattern)
+        if (-not $definitionMatch.Success) {
+            Add-Failure "ControlCatalog does not define $($contract.Action) with an input list."
             $invalidBindingCount += 1
+            continue
+        }
+        foreach ($inputToken in $contract.Inputs) {
+            if ($definitionMatch.Groups['Body'].Value -notmatch [regex]::Escape([string] $inputToken)) {
+                Add-Failure "ControlCatalog does not bind $($contract.Action) to $inputToken."
+                $invalidBindingCount += 1
+            }
         }
     }
+    if ($inputControllerSource -notmatch 'require\s*\(\s*script\.Parent:WaitForChild\s*\(\s*["'']ControlCatalog["'']\s*\)\s*\)' -or
+        $inputControllerSource -notmatch 'table\.unpack\s*\(') {
+        Add-Failure 'InputController does not consume the shared ControlCatalog input lists.'
+        $invalidBindingCount += 1
+    }
     if ($invalidBindingCount -eq 0) {
-        Add-Pass 'FIFA-style core controls are bound: LMB shot, RMB low pass, Q dribble, E tackle.'
+        Add-Pass 'Shared control catalog binds all actions for mouse/keyboard, gamepad, and touch UI.'
+    }
+}
+
+if ((Test-Path -LiteralPath $controlCatalogPath -PathType Leaf) -and (Test-Path -LiteralPath $uiControllerPath -PathType Leaf)) {
+    $controlCatalogSource = Get-Content -LiteralPath $controlCatalogPath -Raw
+    $uiControllerSource = Get-Content -LiteralPath $uiControllerPath -Raw
+    $guideIds = @('BallControl', 'Kick', 'ShotMode', 'Pass', 'Feint', 'Skill', 'Tackle', 'Shield', 'Dash')
+    $missingGuideContracts = 0
+    foreach ($guideId in $guideIds) {
+        if ($controlCatalogSource -notmatch ('id\s*=\s*["'']' + [regex]::Escape($guideId) + '["'']')) {
+            Add-Failure "ControlCatalog guide is missing $guideId."
+            $missingGuideContracts += 1
+        }
+    }
+    foreach ($requiredUiToken in @('ControlsGuide', 'SetControlsGuideVisible', 'ToggleControlsGuide', 'IsControlsGuideVisible', 'Enum.KeyCode.H', 'Enum.KeyCode.ButtonSelect')) {
+        if ($uiControllerSource -notmatch [regex]::Escape($requiredUiToken)) {
+            Add-Failure "UIController controls guide is missing '$requiredUiToken'."
+            $missingGuideContracts += 1
+        }
+    }
+    if ($missingGuideContracts -eq 0) {
+        Add-Pass 'In-game controls guide covers ball control and every ability with reusable toggle bindings.'
     }
 }
 

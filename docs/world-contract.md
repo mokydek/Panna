@@ -46,7 +46,7 @@ Workspace
 
 `CentralStreet` непрерывно идёт от точки появления мимо трёх пар комнат к `EndLandmark`. Комнаты располагаются слева и справа от улицы; у каждой есть переход и собственная уличная точка возврата.
 
-Основной Rojo-проект помещает запечённый `src/world/PannaDistrict.model.json` в `Workspace`, чтобы район был виден в Edit Mode. При старте `WorldBuilder` переиспользует корень только если это `Model` с совпадающим `LayoutVersion`, `ArenaCount = 6`, моделями `DistrictEnvironment`/`Lobby` и ровно шестью комнатами в `Arenas`. Несовместимый корень заменяется новым, собранным вне `Workspace`; ошибка посередине генерации не оставляет частичный мир.
+Основной Rojo-проект помещает запечённый `src/world/PannaDistrict.model.json` в `Workspace`, чтобы район был виден в Edit Mode. При старте `WorldBuilder` переиспользует корень только если это `Model` с совпадающими `LayoutVersion` и `BallRadius`, `ArenaCount = 6`, моделями `DistrictEnvironment`/`Lobby` и ровно шестью комнатами в `Arenas`. Несовместимый корень заменяется новым, собранным вне `Workspace`; ошибка посередине генерации не оставляет частичный мир. Поэтому изменение `Config.Ball.Radius` не может незаметно оставить старые сферы в совместимом bake.
 
 ## Корень, улица и лобби
 
@@ -69,9 +69,10 @@ Workspace
 - `ArenaCount = 6`;
 - `FieldStyle = Config.World.FieldStyle`;
 - `LayoutVersion = Config.Version`;
+- `BallRadius = Config.Ball.Radius`;
 - `RoomStateContract = "Free,Waiting,Countdown,Active,Result"`.
 
-`PannaDistrict` и `DistrictEnvironment` имеют `FieldStyle = "NaturalGrassFootballV1"`; `DistrictEnvironment` также имеет `DistrictStyle = "NaturalFootballDistrict"` и `ExternalAssetCount = 0`. У `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`. Отсутствующий или несовпадающий `FieldStyle` делает старый bake несовместимым и заставляет builder безопасно пересобрать ту же сцену.
+`PannaDistrict` и `DistrictEnvironment` имеют `FieldStyle = "NaturalGrassFootballV1"`; `DistrictEnvironment` также имеет `DistrictStyle = "NaturalFootballDistrict"` и `ExternalAssetCount = 0`. У `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`. Отсутствующий или несовпадающий `FieldStyle` либо `BallRadius` делает старый bake несовместимым и заставляет builder безопасно пересобрать ту же сцену.
 
 `QueuePad` и `QueuePrompt` имеют `QueueMode = "1v1"`. UI-кнопка быстрой очереди и prompt должны идти через один серверный путь. Для prompt используются `T` на клавиатуре и `R3` на геймпаде; touch использует стандартное взаимодействие Roblox.
 

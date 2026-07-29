@@ -2,26 +2,16 @@
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local LOCAL_PLAYER = Players.LocalPlayer
-
-local ACTION_ORDER = table.freeze({ "Kick", "Pass", "Feint", "Skill", "Tackle", "Shield", "Dash" })
-local ACTION_PRESENTATION = table.freeze({
-	Kick = table.freeze({
-		title = "SHOT · NORMAL",
-		keyboard = "LMB · Z MODE",
-		gamepad = "R2 · ↑ MODE",
-	}),
-	Pass = table.freeze({ title = "LOW PASS · HOLD", keyboard = "RMB", gamepad = "X" }),
-	Feint = table.freeze({ title = "DRIBBLE", keyboard = "Q", gamepad = "R1" }),
-	Tackle = table.freeze({ title = "TACKLE", keyboard = "E", gamepad = "B" }),
-	Skill = table.freeze({ title = "PANNA", keyboard = "R", gamepad = "Y" }),
-	Shield = table.freeze({ title = "SHIELD", keyboard = "HOLD C", gamepad = "HOLD L2" }),
-	Dash = table.freeze({ title = "DASH", keyboard = "X", gamepad = "L1" }),
-})
+local ControlCatalog = require(script.Parent:WaitForChild("ControlCatalog"))
+local ACTION_ORDER = ControlCatalog.ActionOrder
+local ACTION_PRESENTATION = ControlCatalog.Actions
+local ABILITY_GUIDE = ControlCatalog.GuideEntries
 
 local COLORS = table.freeze({
 	Background = Color3.fromRGB(8, 12, 19),
@@ -88,6 +78,21 @@ local function makeButton(parent: Instance, name: string, text: string): TextBut
 	addCorner(button, 10)
 	addStroke(button, Color3.new(1, 1, 1), 0.72)
 	return button
+end
+
+local function isVisibleInGui(object: GuiObject, root: ScreenGui): boolean
+	if not root.Enabled then
+		return false
+	end
+
+	local current: Instance? = object
+	while current and current ~= root do
+		if current:IsA("GuiObject") and not current.Visible then
+			return false
+		end
+		current = current.Parent
+	end
+	return current == root
 end
 
 local function read(source: any, ...: string): any
@@ -264,6 +269,11 @@ type ControllerFields = {
 	RematchButton: TextButton,
 	ResultExitButton: TextButton,
 	LeaveMatchButton: TextButton,
+	HelpButton: TextButton,
+	TouchHelpButton: TextButton,
+	ControlsDimmer: Frame,
+	ControlsGuide: Frame,
+	ControlsCloseButton: TextButton,
 	_connections: { RBXScriptConnection },
 	_queueCallback: ((string) -> ())?,
 	_queueJoined: boolean,
@@ -272,6 +282,9 @@ type ControllerFields = {
 	_matchState: string,
 	_selectedArena: string,
 	_isTouchLayout: boolean,
+	_controlsGuideVisible: boolean,
+	_controlsGuideShown: boolean,
+	_previousSelectedObject: GuiObject?,
 	_exitArmToken: number,
 	_exitArmedUntil: number,
 	_localDeadline: number?,
@@ -358,7 +371,7 @@ function UIController.new(): UIController
 	local brand =
 		makeLabel(topBar, "Brand", "PANNA//STREET", Enum.Font.GothamBlack, 15, COLORS.Text)
 	brand.Position = UDim2.fromOffset(18, 0)
-	brand.Size = UDim2.new(0, 158, 1, 0)
+	brand.Size = UDim2.new(0, 118, 1, 0)
 	brand.TextXAlignment = Enum.TextXAlignment.Left
 
 	local brandMark = Instance.new("Frame")
@@ -369,6 +382,14 @@ function UIController.new(): UIController
 	brandMark.Size = UDim2.fromOffset(3, 24)
 	brandMark.Parent = topBar
 	addCorner(brandMark, 2)
+
+	local helpButton = makeButton(topBar, "HelpButton", "HELP")
+	helpButton.BackgroundColor3 = COLORS.PanelLight
+	helpButton.Position = UDim2.fromOffset(132, 12)
+	helpButton.Size = UDim2.fromOffset(38, 32)
+	helpButton.TextColor3 = COLORS.Cyan
+	helpButton.TextSize = 10
+	helpButton.ZIndex = 5
 
 	local stats = Instance.new("Frame")
 	stats.Name = "Stats"
@@ -387,6 +408,16 @@ function UIController.new(): UIController
 	local _, coinsValue = makeStatChip(stats, "Coins", "COINS")
 	local _, levelValue = makeStatChip(stats, "Level", "LEVEL")
 	local _, ratingValue = makeStatChip(stats, "Rating", "RATING")
+
+	local touchHelpButton = makeButton(gui, "TouchHelpButton", "?")
+	touchHelpButton.AnchorPoint = Vector2.new(1, 0)
+	touchHelpButton.BackgroundColor3 = COLORS.Panel
+	touchHelpButton.Position = UDim2.new(1, -12, 0, 132)
+	touchHelpButton.Size = UDim2.fromOffset(38, 38)
+	touchHelpButton.TextColor3 = COLORS.Cyan
+	touchHelpButton.TextSize = 18
+	touchHelpButton.Visible = false
+	touchHelpButton.ZIndex = 75
 
 	local matchCard = Instance.new("Frame")
 	matchCard.Name = "MatchHUD"
@@ -732,6 +763,176 @@ function UIController.new(): UIController
 	resultExitButton.TextColor3 = COLORS.Text
 	resultExitButton.Visible = false
 
+	local controlsDimmer = Instance.new("Frame")
+	controlsDimmer.Name = "ControlsDimmer"
+	controlsDimmer.Active = true
+	controlsDimmer.BackgroundColor3 = Color3.fromRGB(2, 5, 9)
+	controlsDimmer.BackgroundTransparency = 0.2
+	controlsDimmer.BorderSizePixel = 0
+	controlsDimmer.Size = UDim2.fromScale(1, 1)
+	controlsDimmer.Visible = false
+	controlsDimmer.ZIndex = 70
+	controlsDimmer.Parent = gui
+
+	local controlsGuide = Instance.new("Frame")
+	controlsGuide.Name = "ControlsGuide"
+	controlsGuide.Active = true
+	controlsGuide.AnchorPoint = Vector2.new(0.5, 0.5)
+	controlsGuide.BackgroundColor3 = COLORS.Panel
+	controlsGuide.BorderSizePixel = 0
+	controlsGuide.ClipsDescendants = true
+	controlsGuide.Position = UDim2.fromScale(0.5, 0.5)
+	controlsGuide.Size = UDim2.new(1, -48, 1, -64)
+	controlsGuide.ZIndex = 71
+	controlsGuide.Parent = controlsDimmer
+	addCorner(controlsGuide, 20)
+	addStroke(controlsGuide, COLORS.Cyan, 0.34)
+
+	local guideConstraint = Instance.new("UISizeConstraint")
+	guideConstraint.MaxSize = Vector2.new(760, 620)
+	guideConstraint.MinSize = Vector2.new(280, 240)
+	guideConstraint.Parent = controlsGuide
+
+	local guideAccent = Instance.new("Frame")
+	guideAccent.Name = "Accent"
+	guideAccent.BackgroundColor3 = COLORS.Cyan
+	guideAccent.BorderSizePixel = 0
+	guideAccent.Size = UDim2.new(1, 0, 0, 5)
+	guideAccent.ZIndex = 72
+	guideAccent.Parent = controlsGuide
+	local guideGradient = Instance.new("UIGradient")
+	guideGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.Cyan),
+		ColorSequenceKeypoint.new(0.5, COLORS.Lime),
+		ColorSequenceKeypoint.new(1, COLORS.Pink),
+	})
+	guideGradient.Parent = guideAccent
+
+	local guideTitle = makeLabel(
+		controlsGuide,
+		"Title",
+		"CONTROLS & ABILITIES",
+		Enum.Font.GothamBlack,
+		23,
+		COLORS.Text
+	)
+	guideTitle.Position = UDim2.fromOffset(20, 15)
+	guideTitle.Size = UDim2.new(1, -92, 0, 28)
+	guideTitle.TextXAlignment = Enum.TextXAlignment.Left
+	guideTitle.ZIndex = 73
+
+	local guideSubtitle = makeLabel(
+		controlsGuide,
+		"Subtitle",
+		"H / SELECT TO TOGGLE  -  SCROLL FOR EVERY MOVE",
+		Enum.Font.GothamBold,
+		9,
+		COLORS.Cyan
+	)
+	guideSubtitle.Position = UDim2.fromOffset(21, 45)
+	guideSubtitle.Size = UDim2.new(1, -94, 0, 16)
+	guideSubtitle.TextXAlignment = Enum.TextXAlignment.Left
+	guideSubtitle.ZIndex = 73
+
+	local guideClose = makeButton(controlsGuide, "Close", "X")
+	guideClose.AnchorPoint = Vector2.new(1, 0)
+	guideClose.BackgroundColor3 = COLORS.PanelLight
+	guideClose.Position = UDim2.new(1, -16, 0, 15)
+	guideClose.Size = UDim2.fromOffset(38, 38)
+	guideClose.TextColor3 = COLORS.Text
+	guideClose.TextSize = 15
+	guideClose.Modal = true
+	guideClose.ZIndex = 74
+
+	local controlsList = Instance.new("ScrollingFrame")
+	controlsList.Name = "AbilityList"
+	controlsList.Active = true
+	controlsList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	controlsList.BackgroundTransparency = 1
+	controlsList.BorderSizePixel = 0
+	controlsList.CanvasSize = UDim2.fromOffset(0, 0)
+	controlsList.Position = UDim2.fromOffset(16, 72)
+	controlsList.ScrollBarImageColor3 = COLORS.Cyan
+	controlsList.ScrollBarThickness = 5
+	controlsList.Selectable = true
+	controlsList.Size = UDim2.new(1, -32, 1, -88)
+	controlsList.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar
+	controlsList.ZIndex = 72
+	controlsList.Parent = controlsGuide
+	guideClose.NextSelectionDown = controlsList
+	controlsList.NextSelectionUp = guideClose
+
+	local guidePadding = Instance.new("UIPadding")
+	guidePadding.PaddingBottom = UDim.new(0, 8)
+	guidePadding.PaddingRight = UDim.new(0, 8)
+	guidePadding.Parent = controlsList
+
+	local guideLayout = Instance.new("UIListLayout")
+	guideLayout.Padding = UDim.new(0, 8)
+	guideLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	guideLayout.Parent = controlsList
+
+	for index, entry in ABILITY_GUIDE do
+		local row = Instance.new("Frame")
+		row.Name = entry.id
+		row.BackgroundColor3 = if index % 2 == 0 then COLORS.PanelLight else COLORS.Background
+		row.BackgroundTransparency = if index % 2 == 0 then 0.16 else 0.28
+		row.BorderSizePixel = 0
+		row.LayoutOrder = index
+		row.Size = UDim2.new(1, -4, 0, 108)
+		row.ZIndex = 73
+		row.Parent = controlsList
+		addCorner(row, 12)
+		addStroke(row, if index % 3 == 0 then COLORS.Pink else COLORS.Cyan, 0.72)
+
+		local rowAccent = Instance.new("Frame")
+		rowAccent.BackgroundColor3 = if index % 3 == 0
+			then COLORS.Pink
+			else if index % 3 == 1 then COLORS.Cyan else COLORS.Lime
+		rowAccent.BorderSizePixel = 0
+		rowAccent.Position = UDim2.fromOffset(0, 10)
+		rowAccent.Size = UDim2.new(0, 4, 1, -20)
+		rowAccent.ZIndex = 74
+		rowAccent.Parent = row
+		addCorner(rowAccent, 2)
+
+		local rowTitle =
+			makeLabel(row, "Title", entry.title, Enum.Font.GothamBlack, 13, COLORS.Text)
+		rowTitle.Position = UDim2.fromOffset(14, 8)
+		rowTitle.Size = UDim2.new(1, -28, 0, 18)
+		rowTitle.TextXAlignment = Enum.TextXAlignment.Left
+		rowTitle.ZIndex = 74
+
+		local bindings = makeLabel(
+			row,
+			"Bindings",
+			string.format(
+				"PC  %s     PAD  %s     TOUCH  %s",
+				entry.keyboard,
+				entry.gamepad,
+				entry.touch
+			),
+			Enum.Font.Code,
+			10,
+			COLORS.Cyan
+		)
+		bindings.Position = UDim2.fromOffset(14, 28)
+		bindings.Size = UDim2.new(1, -28, 0, 30)
+		bindings.TextWrapped = true
+		bindings.TextXAlignment = Enum.TextXAlignment.Left
+		bindings.TextYAlignment = Enum.TextYAlignment.Top
+		bindings.ZIndex = 74
+
+		local description =
+			makeLabel(row, "Description", entry.description, Enum.Font.Gotham, 10, COLORS.Muted)
+		description.Position = UDim2.fromOffset(14, 62)
+		description.Size = UDim2.new(1, -28, 0, 40)
+		description.TextWrapped = true
+		description.TextXAlignment = Enum.TextXAlignment.Left
+		description.TextYAlignment = Enum.TextYAlignment.Top
+		description.ZIndex = 74
+	end
+
 	local self = setmetatable({
 		Gui = gui,
 		TopBar = topBar,
@@ -768,6 +969,11 @@ function UIController.new(): UIController
 		RematchButton = rematchButton,
 		ResultExitButton = resultExitButton,
 		LeaveMatchButton = leaveMatchButton,
+		HelpButton = helpButton,
+		TouchHelpButton = touchHelpButton,
+		ControlsDimmer = controlsDimmer,
+		ControlsGuide = controlsGuide,
+		ControlsCloseButton = guideClose,
 		_connections = {},
 		_queueCallback = nil,
 		_queueJoined = false,
@@ -776,6 +982,9 @@ function UIController.new(): UIController
 		_matchState = "",
 		_selectedArena = "",
 		_isTouchLayout = preferredInputIsTouch(),
+		_controlsGuideVisible = false,
+		_controlsGuideShown = false,
+		_previousSelectedObject = nil,
 		_exitArmToken = 0,
 		_exitArmedUntil = 0,
 		_localDeadline = nil,
@@ -797,7 +1006,12 @@ function UIController.new(): UIController
 	table.insert(
 		self._connections,
 		queueButton.Activated:Connect(function()
-			if self._destroyed or self._queuePending or not self.QueueButton.Active then
+			if
+				self._destroyed
+				or self._controlsGuideVisible
+				or self._queuePending
+				or not self.QueueButton.Active
+			then
 				return
 			end
 
@@ -834,7 +1048,11 @@ function UIController.new(): UIController
 	table.insert(
 		self._connections,
 		resultExitButton.Activated:Connect(function()
-			if self._destroyed or not self.ResultExitButton.Active then
+			if
+				self._destroyed
+				or self._controlsGuideVisible
+				or not self.ResultExitButton.Active
+			then
 				return
 			end
 			local callback = self._queueCallback
@@ -850,7 +1068,11 @@ function UIController.new(): UIController
 	table.insert(
 		self._connections,
 		leaveMatchButton.Activated:Connect(function()
-			if self._destroyed or not self.LeaveMatchButton.Active then
+			if
+				self._destroyed
+				or self._controlsGuideVisible
+				or not self.LeaveMatchButton.Active
+			then
 				return
 			end
 			local callback = self._queueCallback
@@ -890,7 +1112,7 @@ function UIController.new(): UIController
 	table.insert(
 		self._connections,
 		rematchButton.Activated:Connect(function()
-			if self._destroyed or not self.RematchButton.Active then
+			if self._destroyed or self._controlsGuideVisible or not self.RematchButton.Active then
 				return
 			end
 			local callback = self._queueCallback
@@ -900,6 +1122,43 @@ function UIController.new(): UIController
 			self.RematchButton.Active = false
 			self.RematchButton.Text = "REQUESTED"
 			callback("Rematch")
+		end)
+	)
+
+	for _, button in { helpButton, touchHelpButton } do
+		table.insert(
+			self._connections,
+			button.Activated:Connect(function()
+				self:ToggleControlsGuide()
+			end)
+		)
+	end
+	table.insert(
+		self._connections,
+		guideClose.Activated:Connect(function()
+			self:SetControlsGuideVisible(false)
+		end)
+	)
+	table.insert(
+		self._connections,
+		UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessed: boolean)
+			if self._destroyed then
+				return
+			end
+			if input.KeyCode == Enum.KeyCode.Escape and self._controlsGuideVisible then
+				self:SetControlsGuideVisible(false)
+				return
+			end
+			if input.KeyCode == Enum.KeyCode.ButtonSelect then
+				self:ToggleControlsGuide()
+				return
+			end
+			if gameProcessed then
+				return
+			end
+			if input.KeyCode == Enum.KeyCode.H then
+				self:ToggleControlsGuide()
+			end
 		end)
 	)
 
@@ -934,8 +1193,11 @@ function UIController.new(): UIController
 		local touchLayout = preferredInputIsTouch()
 		self._isTouchLayout = touchLayout
 		self.Brand.Visible = not compact
-		stats.Position = if compact then UDim2.fromOffset(8, 0) else UDim2.fromOffset(176, 0)
-		stats.Size = if compact then UDim2.new(1, -16, 1, 0) else UDim2.new(1, -184, 1, 0)
+		helpButton.Text = if compact then "?" else "HELP"
+		helpButton.Position = if compact then UDim2.fromOffset(8, 12) else UDim2.fromOffset(132, 12)
+		helpButton.Size = UDim2.fromOffset(if compact then 34 else 38, 32)
+		stats.Position = if compact then UDim2.fromOffset(48, 0) else UDim2.fromOffset(176, 0)
+		stats.Size = if compact then UDim2.new(1, -56, 1, 0) else UDim2.new(1, -184, 1, 0)
 		homeName.TextSize = if compact then 13 else 16
 		awayName.TextSize = if compact then 13 else 16
 		score.TextSize = if compact then 25 else 29
@@ -945,6 +1207,7 @@ function UIController.new(): UIController
 		leaveMatchButton.TextSize = if compact then 9 else 10
 		local touchGameplay = touchLayout and self:IsGameplayActive()
 		topBar.Visible = not touchGameplay
+		touchHelpButton.Visible = touchGameplay and not self._controlsGuideVisible
 		matchCard.Position =
 			UDim2.new(0.5, 0, 0, if touchGameplay then 12 else if compact then 76 else 80)
 		queueCard.Position = UDim2.new(0.5, 0, 1, if touchLayout then -14 else -24)
@@ -969,6 +1232,15 @@ function UIController.new(): UIController
 		rematchButton.Size = UDim2.fromOffset(resultWidth, 38)
 		resultExitButton.Position = UDim2.new(0.5, resultOffset, 0.52, 82)
 		resultExitButton.Size = UDim2.fromOffset(resultWidth, 38)
+		controlsGuide.Size = if compact or short
+			then UDim2.new(1, -20, 1, -20)
+			else UDim2.new(1, -48, 1, -64)
+		guideTitle.TextSize = if compact then 18 else 23
+		local condensedGuideHeader = compact and short
+		guideSubtitle.Visible = not condensedGuideHeader
+		local guideListTop = if condensedGuideHeader then 57 else 72
+		controlsList.Position = UDim2.fromOffset(12, guideListTop)
+		controlsList.Size = UDim2.new(1, -24, 1, -(guideListTop + 12))
 		updateInputPrompts()
 	end
 
@@ -1017,6 +1289,43 @@ function UIController.new(): UIController
 	)
 
 	return self
+end
+
+function UIController.GetAbilityGuide(): { any }
+	return ABILITY_GUIDE
+end
+
+function UIController.SetControlsGuideVisible(self: UIController, visible: boolean)
+	if self._destroyed then
+		return
+	end
+
+	self._controlsGuideVisible = visible
+	if visible then
+		self._controlsGuideShown = true
+		self._previousSelectedObject = GuiService.SelectedObject
+	end
+	self.ControlsDimmer.Visible = visible
+	self.HelpButton.BackgroundColor3 = if visible then COLORS.Cyan else COLORS.PanelLight
+	self.HelpButton.TextColor3 = if visible then COLORS.Background else COLORS.Cyan
+	self.TouchHelpButton.Visible = not visible and self._isTouchLayout and self:IsGameplayActive()
+	if visible then
+		GuiService.SelectedObject = self.ControlsCloseButton
+	else
+		local previous = self._previousSelectedObject
+		self._previousSelectedObject = nil
+		GuiService.SelectedObject = if previous and isVisibleInGui(previous, self.Gui)
+			then previous
+			else nil
+	end
+end
+
+function UIController.ToggleControlsGuide(self: UIController)
+	self:SetControlsGuideVisible(not self._controlsGuideVisible)
+end
+
+function UIController.IsControlsGuideVisible(self: UIController): boolean
+	return self._controlsGuideVisible
 end
 
 function UIController.SetQueueRequestHandler(self: UIController, callback: (string) -> ())
@@ -1145,6 +1454,7 @@ function UIController.SetMatchState(self: UIController, match: any)
 		self._localDeadline = nil
 		self._serverDeadline = nil
 		self.TopBar.Visible = true
+		self.TouchHelpButton.Visible = false
 		self.MatchCard.Visible = false
 		self.BallStatus.Visible = false
 		self.PowerContainer.Visible = false
@@ -1165,6 +1475,7 @@ function UIController.SetMatchState(self: UIController, match: any)
 		return
 	end
 
+	local previousState = self._matchState
 	local state = readString(match, "Active", "state", "State")
 	local homeName = readString(match, "HOME", "homeName", "HomeName")
 	local awayName = readString(match, "AWAY", "awayName", "AwayName")
@@ -1200,12 +1511,20 @@ function UIController.SetMatchState(self: UIController, match: any)
 	self.BallStatus.Visible = true
 	self.QueueCard.Visible = false
 	local gameplayActive = state == "Active" or state == "Overtime"
+	if state == "Countdown" and previousState ~= "Countdown" and not self._controlsGuideShown then
+		self:SetControlsGuideVisible(true)
+	elseif gameplayActive and previousState == "Countdown" and self._controlsGuideVisible then
+		self:SetControlsGuideVisible(false)
+	end
 	if not gameplayActive then
 		self:ResetTransientState()
 	end
 	local camera = Workspace.CurrentCamera
 	local compact = camera ~= nil and camera.ViewportSize.X < 600
 	self.TopBar.Visible = not (self._isTouchLayout and gameplayActive)
+	self.TouchHelpButton.Visible = self._isTouchLayout
+		and gameplayActive
+		and not self._controlsGuideVisible
 	self.MatchCard.Position = UDim2.new(
 		0.5,
 		0,

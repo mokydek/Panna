@@ -98,7 +98,7 @@ local function placeBallForController(arena: Instance, player: Player): BasePart
 	else
 		look = look.Unit
 	end
-	local horizontalTarget = root.Position + look * 2.8
+	local horizontalTarget = root.Position + look * Config.Ball.Dribble.WalkDistance
 	ball.AssemblyLinearVelocity = Vector3.zero
 	ball.AssemblyAngularVelocity = Vector3.zero
 	ball.CFrame = CFrame.new(horizontalTarget.X, ballSpawn.Position.Y, horizontalTarget.Z)

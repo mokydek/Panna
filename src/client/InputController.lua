@@ -10,38 +10,13 @@ local Workspace = game:GetService("Workspace")
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local ACTION_PRIORITY = Enum.ContextActionPriority.High.Value
-
-local SHOT_TYPES = table.freeze({ "Normal", "Low", "Chip" })
-local ACTION_ORDER = table.freeze({ "Kick", "Pass", "Feint", "Skill", "Tackle", "Shield", "Dash" })
-local TOUCH_ORDER = table.freeze({
-	"Kick",
-	"Pass",
-	"Feint",
-	"Skill",
-	"Tackle",
-	"Shield",
-	"Dash",
-	"ShotMode",
-})
-local BINDINGS = table.freeze({
-	Kick = "Panna_Kick",
-	Pass = "Panna_Pass",
-	Feint = "Panna_Feint",
-	Tackle = "Panna_Tackle",
-	Skill = "Panna_Skill",
-	Shield = "Panna_Shield",
-	Dash = "Panna_Dash",
-	ShotMode = "Panna_ShotMode",
-})
-local TOUCH_TITLES = table.freeze({
-	Kick = "SHOT",
-	Pass = "PASS",
-	Feint = "DRIBBLE",
-	Tackle = "TACKLE",
-	Skill = "PANNA",
-	Shield = "SHIELD",
-	Dash = "DASH",
-})
+local ControlCatalog = require(script.Parent:WaitForChild("ControlCatalog"))
+local SHOT_TYPES = ControlCatalog.ShotTypes
+local ACTION_ORDER = ControlCatalog.ActionOrder
+local TOUCH_ORDER = ControlCatalog.TouchOrder
+local ACTIONS = ControlCatalog.Actions
+local BINDINGS = ControlCatalog.Bindings
+local TOUCH_TITLES = ControlCatalog.TouchTitles
 local DEFAULT_COOLDOWNS = table.freeze({
 	Kick = 0.28,
 	Pass = 0.35,
@@ -64,14 +39,14 @@ type TimingSettings = {
 }
 
 local DEFAULT_TIMINGS: TimingSettings = table.freeze({
-	kickChargeSeconds = 1.15,
-	passChargeSeconds = 0.85,
-	minimumKickPower = 0.12,
-	minimumPassPower = 0.16,
-	kickPowerExponent = 0.82,
-	passPowerExponent = 0.9,
+	kickChargeSeconds = 1.1,
+	passChargeSeconds = 0.9,
+	minimumKickPower = 0.1,
+	minimumPassPower = 0.1,
+	kickPowerExponent = 1,
+	passPowerExponent = 1.05,
 	pendingTimeoutSeconds = 2.1,
-	trapBufferSeconds = 0.8,
+	trapBufferSeconds = 0.9,
 })
 
 type UIControllerLike = {
@@ -85,6 +60,7 @@ type UIControllerLike = {
 	ResetTransientState: (self: any) -> (),
 	IsGameplayActive: (self: any) -> boolean,
 	IsPointerOverUI: (self: any) -> boolean,
+	IsControlsGuideVisible: (self: any) -> boolean,
 }
 
 type PendingRequest = {
@@ -421,6 +397,7 @@ end
 
 function InputController._isGameplayActive(self: InputController): boolean
 	return self._ui:IsGameplayActive()
+		and not self._ui:IsControlsGuideVisible()
 		and LOCAL_PLAYER:GetAttribute("InMatch") == true
 		and LOCAL_PLAYER:GetAttribute("ControlsLocked") ~= true
 		and self:_arenaId() ~= ""
@@ -1198,21 +1175,29 @@ end
 
 function InputController._bindActions(self: InputController)
 	local makeTouchButtons = UserInputService.TouchEnabled
+	local kickInputs = (ACTIONS :: any).Kick.inputs
+	local passInputs = (ACTIONS :: any).Pass.inputs
+	local feintInputs = (ACTIONS :: any).Feint.inputs
+	local tackleInputs = (ACTIONS :: any).Tackle.inputs
+	local skillInputs = (ACTIONS :: any).Skill.inputs
+	local shieldInputs = (ACTIONS :: any).Shield.inputs
+	local dashInputs = (ACTIONS :: any).Dash.inputs
+	local shotModeInputs = (ACTIONS :: any).ShotMode.inputs
 	ContextActionService:BindActionAtPriority(BINDINGS.Kick, function(_, inputState, input)
 		return self:_onChargeAction("Kick", inputState, input)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
+	end, makeTouchButtons, ACTION_PRIORITY, table.unpack(kickInputs))
 	ContextActionService:BindActionAtPriority(BINDINGS.Pass, function(_, inputState, input)
 		return self:_onChargeAction("Pass", inputState, input)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonX)
+	end, makeTouchButtons, ACTION_PRIORITY, table.unpack(passInputs))
 	ContextActionService:BindActionAtPriority(BINDINGS.Feint, function(_, inputState)
 		return self:_onInstantAction("Feint", inputState)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.Q, Enum.KeyCode.V, Enum.KeyCode.ButtonR1)
+	end, makeTouchButtons, ACTION_PRIORITY, table.unpack(feintInputs))
 	ContextActionService:BindActionAtPriority(BINDINGS.Tackle, function(_, inputState)
 		return self:_onInstantAction("Tackle", inputState)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.E, Enum.KeyCode.F, Enum.KeyCode.ButtonB)
+	end, makeTouchButtons, ACTION_PRIORITY, table.unpack(tackleInputs))
 	ContextActionService:BindActionAtPriority(BINDINGS.Skill, function(_, inputState)
 		return self:_onInstantAction("Skill", inputState)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.R, Enum.KeyCode.ButtonY)
+	end, makeTouchButtons, ACTION_PRIORITY, table.unpack(skillInputs))
 	ContextActionService:BindActionAtPriority(
 		BINDINGS.Shield,
 		function(actionName, inputState, input)
@@ -1220,15 +1205,14 @@ function InputController._bindActions(self: InputController)
 		end,
 		makeTouchButtons,
 		ACTION_PRIORITY,
-		Enum.KeyCode.C,
-		Enum.KeyCode.ButtonL2
+		table.unpack(shieldInputs)
 	)
 	ContextActionService:BindActionAtPriority(BINDINGS.Dash, function(_, inputState)
 		return self:_onInstantAction("Dash", inputState)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.X, Enum.KeyCode.ButtonL1)
+	end, makeTouchButtons, ACTION_PRIORITY, table.unpack(dashInputs))
 	ContextActionService:BindActionAtPriority(BINDINGS.ShotMode, function(_, inputState)
 		return self:_onShotMode(inputState)
-	end, makeTouchButtons, ACTION_PRIORITY, Enum.KeyCode.Z, Enum.KeyCode.DPadUp)
+	end, makeTouchButtons, ACTION_PRIORITY, table.unpack(shotModeInputs))
 
 	if makeTouchButtons then
 		for action, binding in BINDINGS do

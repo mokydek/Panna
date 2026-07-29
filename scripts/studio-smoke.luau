@@ -29,12 +29,80 @@ local remoteRegistry = require(serverRoot:FindFirstChild("RemoteRegistry"))
 local clientRoot = StarterPlayer.StarterPlayerScripts:FindFirstChild("PannaClient")
 expect(clientRoot ~= nil, "PannaClient was not mapped by Rojo")
 local effectScope = require(clientRoot:FindFirstChild("EffectScope"))
-for _, moduleName in { "InputController", "UIController" } do
+local clientModules = {}
+for _, moduleName in { "ControlCatalog", "InputController", "UIController" } do
 	local clientModule = clientRoot:FindFirstChild(moduleName)
 	expect(clientModule ~= nil, moduleName .. " was not mapped by Rojo")
 	local ok, result = pcall(require, clientModule)
 	expect(ok, moduleName .. " failed to load: " .. tostring(result))
 	expect(type(result) == "table", moduleName .. " must return a module table")
+	clientModules[moduleName] = result
+end
+
+local controlCatalog = clientModules.ControlCatalog
+local uiControllerModule = clientModules.UIController
+expect(#controlCatalog.ActionOrder == 7, "control catalog must expose seven HUD actions")
+expect(#controlCatalog.TouchOrder == 8, "touch catalog must include ShotMode")
+local guideEntries = uiControllerModule.GetAbilityGuide()
+expect(guideEntries == controlCatalog.GuideEntries, "HUD guide did not use the shared catalog")
+expect(#guideEntries == 9, "ability guide must explain control plus all eight actions")
+local expectedGuideEntries = {
+	BallControl = true,
+	Kick = true,
+	ShotMode = true,
+	Pass = true,
+	Feint = true,
+	Skill = true,
+	Tackle = true,
+	Shield = true,
+	Dash = true,
+}
+for _, entry in guideEntries do
+	expect(
+		expectedGuideEntries[entry.id] == true,
+		"unexpected or duplicate guide entry " .. entry.id
+	)
+	expect(entry.title ~= "", entry.id .. " guide title is empty")
+	expect(entry.keyboard ~= "", entry.id .. " keyboard guide is empty")
+	expect(entry.gamepad ~= "", entry.id .. " gamepad guide is empty")
+	expect(entry.touch ~= "", entry.id .. " touch guide is empty")
+	expect(entry.description ~= "", entry.id .. " guide description is empty")
+	expectedGuideEntries[entry.id] = nil
+end
+expect(next(expectedGuideEntries) == nil, "ability guide is missing an entry")
+for _, methodName in
+	{
+		"SetControlsGuideVisible",
+		"ToggleControlsGuide",
+		"IsControlsGuideVisible",
+	}
+do
+	expect(
+		type(uiControllerModule[methodName]) == "function",
+		"UIController." .. methodName .. " missing"
+	)
+end
+
+local expectedInputs = {
+	Kick = { Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2 },
+	Pass = { Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonX },
+	Feint = { Enum.KeyCode.Q, Enum.KeyCode.V, Enum.KeyCode.ButtonR1 },
+	Skill = { Enum.KeyCode.R, Enum.KeyCode.ButtonY },
+	Tackle = { Enum.KeyCode.E, Enum.KeyCode.F, Enum.KeyCode.ButtonB },
+	Shield = { Enum.KeyCode.C, Enum.KeyCode.ButtonL2 },
+	Dash = { Enum.KeyCode.X, Enum.KeyCode.ButtonL1 },
+	ShotMode = { Enum.KeyCode.Z, Enum.KeyCode.DPadUp },
+}
+local seenBindings = {}
+for action, inputs in expectedInputs do
+	local definition = controlCatalog.Actions[action]
+	expect(type(definition) == "table", action .. " control definition missing")
+	expect(definition.bindingName ~= "", action .. " binding name is empty")
+	expect(seenBindings[definition.bindingName] == nil, action .. " binding name is duplicated")
+	seenBindings[definition.bindingName] = true
+	for _, expectedInput in inputs do
+		expect(table.find(definition.inputs, expectedInput) ~= nil, action .. " input is missing")
+	end
 end
 
 expect(type(ballMath) == "table", "BallMath module failed to load")
@@ -105,6 +173,19 @@ local resolvedRotated = rotated :: Vector3
 expect(
 	math.abs(resolvedRotated.Magnitude - 1) < 1e-4 and resolvedRotated:Dot(Vector3.new(1, 0, 0)) > 0,
 	"physical control direction did not rotate along the shortest arc"
+)
+local movingControlDirection =
+	ballMath.PreferredControlDirection(Vector3.new(0, 0, -1), Vector3.new(8, 3, 0), 2)
+expect(
+	movingControlDirection ~= nil and (movingControlDirection :: Vector3):Dot(Vector3.xAxis) > 0.999,
+	"physical control direction did not follow trusted horizontal movement"
+)
+local idleControlDirection =
+	ballMath.PreferredControlDirection(Vector3.new(0, 0, -1), Vector3.new(0.25, 4, 0), 2)
+expect(
+	idleControlDirection ~= nil
+		and (idleControlDirection :: Vector3):Dot(Vector3.new(0, 0, -1)) > 0.999,
+	"physical control direction did not fall back to character facing"
 )
 local projected = ballMath.ProjectOnPlane(Vector3.new(3, 5, 4), Vector3.yAxis)
 expect(projected == Vector3.new(3, 0, 4), "ground-plane projection is incorrect")
@@ -439,6 +520,33 @@ expect(
 	config.Ball.Pass.SpeedMaximum <= config.Ball.Limits.MaximumSpeed,
 	"Pass tuning exceeds the global ball speed cap"
 )
+expect(config.Ball.Radius < 1.25 and config.Ball.Radius >= 1, "ball was not made slightly smaller")
+local previousMassScale = 0.65 * 1.25 ^ 3
+local tunedMassScale = config.Ball.Density * config.Ball.Radius ^ 3
+expect(
+	math.abs(tunedMassScale / previousMassScale - 1) <= 0.03,
+	"smaller ball tuning did not preserve approximate mass"
+)
+expect(
+	config.Ball.Dribble.ShieldDistance > config.Ball.Radius + 0.5,
+	"shield target clips the smaller ball into the carrier"
+)
+expect(
+	config.Ball.Dribble.SprintDistance < config.Ball.Capture.OwnerFrontDistance
+		and config.Ball.Dribble.SprintDistance < config.Ball.Capture.OwnerBreakRadius,
+	"dribble targets exceed the owner retention envelope"
+)
+expect(
+	config.Ball.Dribble.DampingRatio >= 1
+		and config.Ball.Dribble.NaturalFrequency >= 8
+		and config.Ball.Dribble.MaximumAccelerationSprint
+			> config.Ball.Dribble.MaximumAccelerationWalk,
+	"controlled dribble response tuning is not stable"
+)
+expect(
+	config.Ball.Shot.PlayerVelocityCarry <= 0.2 and config.Ball.Pass.PlayerVelocityCarry <= 0.2,
+	"launch direction still inherits too much player velocity"
+)
 
 local tackleForward = Vector3.new(0, 0, -1)
 local frontOffset = Vector3.new(0, 0, -4)
@@ -503,6 +611,15 @@ expect(
 )
 expect(
 	goalMath.DidSphereFullyCross(
+		Vector3.new(0, 1.5, 6),
+		Vector3.new(0, 1.5, 9.4),
+		config.Ball.Radius,
+		resolvedGoalGeometry
+	),
+	"configured smaller ball did not register a full goal-line crossing"
+)
+expect(
+	goalMath.DidSphereFullyCross(
 		Vector3.new(0, 1, 5),
 		Vector3.new(0, 1, 14),
 		ballRadius,
@@ -558,6 +675,51 @@ expect(world:GetAttribute("DistrictName") == "PannaDistrict", "district identity
 expect(
 	world:GetAttribute("FieldStyle") == config.World.FieldStyle,
 	"district field style does not match Config"
+)
+local builtBallRadius = world:GetAttribute("BallRadius")
+expect(
+	typeof(builtBallRadius) == "number"
+		and math.abs((builtBallRadius :: number) - config.Ball.Radius) < 1e-4,
+	"district bake is not versioned by ball radius"
+)
+
+local function expectConfiguredBall(ball: BasePart, label: string)
+	local diameter = config.Ball.Radius * 2
+	expect(ball.Shape == Enum.PartType.Ball, label .. " is not spherical")
+	expect(
+		(ball.Size - Vector3.new(diameter, diameter, diameter)).Magnitude < 1e-4,
+		label .. " size does not match Config.Ball.Radius"
+	)
+	local physicalProperties = ball.CustomPhysicalProperties
+	expect(physicalProperties ~= nil, label .. " custom physical properties are missing")
+	expect(
+		math.abs((physicalProperties :: PhysicalProperties).Density - config.Ball.Density) < 1e-4,
+		label .. " density does not match the mass-preserving tune"
+	)
+	local trailTop = ball:FindFirstChild("PannaTrailTop")
+	local trailBottom = ball:FindFirstChild("PannaTrailBottom")
+	expect(trailTop ~= nil and trailTop:IsA("Attachment"), label .. " trail top is missing")
+	expect(
+		trailBottom ~= nil and trailBottom:IsA("Attachment"),
+		label .. " trail bottom is missing"
+	)
+	expect(
+		math.abs((trailTop :: Attachment).Position.Y - config.Ball.Radius * 0.55) < 1e-4
+			and math.abs((trailBottom :: Attachment).Position.Y + config.Ball.Radius * 0.55)
+				< 1e-4,
+		label .. " trail offsets do not match the smaller radius"
+	)
+end
+
+local trainingBall = world:FindFirstChild("TrainingBall", true)
+expect(trainingBall ~= nil and trainingBall:IsA("BasePart"), "TrainingBall is missing")
+expectConfiguredBall(trainingBall :: BasePart, "TrainingBall")
+local trainingBallSpawn = world:FindFirstChild("TrainingBallSpawn", true)
+expect(
+	trainingBallSpawn ~= nil
+		and trainingBallSpawn:IsA("BasePart")
+		and ((trainingBall :: BasePart).Position - trainingBallSpawn.Position).Magnitude < 1e-4,
+	"TrainingBall does not start at its radius-aware spawn"
 )
 local environment = world:FindFirstChild("DistrictEnvironment")
 expect(environment ~= nil and environment:IsA("Model"), "DistrictEnvironment is missing")
@@ -638,6 +800,11 @@ for _, arena in arenaList do
 	)
 	expect(arena.Model:GetAttribute("ArenaState") == "Free", arena.Id .. " must start Free")
 	expect(arena.Model:GetAttribute("WaitingCount") == 0, arena.Id .. " has stale waiting state")
+	expectConfiguredBall(arena.Ball, arena.Id .. " ball")
+	expect(
+		(arena.Ball.Position - arena.BallSpawn.Position).Magnitude < 1e-4,
+		arena.Id .. " ball does not start at its radius-aware spawn"
+	)
 	for _, partName in
 		{
 			"EntryZone",

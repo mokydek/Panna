@@ -1048,10 +1048,11 @@ function BallService._activeShield(
 		self.shields[player] = nil
 		return nil
 	end
-	local facing = if humanoid.MoveDirection.Magnitude > 0.15
-		then humanoid.MoveDirection
-		else root.CFrame.LookVector
-	local currentDirection = safeHorizontalDirection(facing, shield.direction)
+	local currentDirection = BallMath.PreferredControlDirection(
+		root.CFrame.LookVector,
+		self:_trustedCarrierVelocity(player, root, now),
+		math.max(0.75, self.config.Ball.Dribble.WalkSpeedThreshold * 0.5)
+	)
 	if currentDirection then
 		shield.direction = currentDirection
 	end
@@ -2180,8 +2181,19 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 		self:_loseControl(state, owner, now, "ControlDirectionLost")
 		return
 	end
+	local carrierVelocity = self:_trustedCarrierVelocity(owner, root, now)
+	local travelDirection = BallMath.PreferredControlDirection(
+		facing,
+		carrierVelocity,
+		math.max(0.75, dribble.WalkSpeedThreshold * 0.5)
+	)
+	if not travelDirection then
+		self:_loseControl(state, owner, now, "ControlDirectionLost")
+		return
+	end
+	local baseControlDirection = if self.feints[owner] == nil then travelDirection else facing
 	local feintDirection, lateralOffset, feintDistanceMultiplier, feintAccelerationMultiplier =
-		self:_feintTarget(owner, facing, now)
+		self:_feintTarget(owner, baseControlDirection, now)
 	local controlDirection = BallMath.RotateHorizontalTowards(
 		state.controlDirection or facing,
 		feintDirection,
@@ -2192,7 +2204,6 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 		return
 	end
 	state.controlDirection = controlDirection
-	local carrierVelocity = self:_trustedCarrierVelocity(owner, root, now)
 	local rootSpeed = carrierVelocity.Magnitude
 	local sprinting = rootSpeed >= dribble.SprintSpeed
 	local baseDistance = if shield

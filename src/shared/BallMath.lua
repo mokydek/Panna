@@ -91,6 +91,26 @@ function BallMath.RotateHorizontalTowards(
 	return CFrame.fromAxisAngle(Vector3.yAxis, step):VectorToWorldSpace(from).Unit
 end
 
+function BallMath.PreferredControlDirection(
+	facing: Vector3,
+	carrierVelocity: Vector3,
+	minimumMovementSpeed: number
+): Vector3?
+	if
+		not BallMath.IsFiniteVector3(facing)
+		or not BallMath.IsFiniteVector3(carrierVelocity)
+		or not BallMath.IsFiniteNumber(minimumMovementSpeed)
+	then
+		return nil
+	end
+
+	local horizontalVelocity = Vector3.new(carrierVelocity.X, 0, carrierVelocity.Z)
+	if horizontalVelocity.Magnitude >= math.max(0.05, minimumMovementSpeed) then
+		return horizontalVelocity.Unit
+	end
+	return BallMath.HorizontalUnit(facing, Vector3.zero)
+end
+
 function BallMath.PhysicalControlTarget(
 	rootCFrame: CFrame,
 	direction: Vector3,

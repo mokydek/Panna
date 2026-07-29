@@ -1976,10 +1976,15 @@ local function isCompatibleBakedDistrict(candidate: Instance, config: Config): b
 	if not candidate:IsA("Model") then
 		return false
 	end
+	local bakedBallRadius = candidate:GetAttribute("BallRadius")
+	if typeof(bakedBallRadius) ~= "number" then
+		return false
+	end
 	if
 		candidate:GetAttribute("LayoutVersion") ~= config.Version
 		or candidate:GetAttribute("FieldStyle") ~= config.World.FieldStyle
 		or candidate:GetAttribute("ArenaCount") ~= ARENA_COUNT
+		or math.abs(bakedBallRadius - config.Ball.Radius) > 1e-4
 		or not candidate:FindFirstChild("DistrictEnvironment")
 		or not candidate:FindFirstChild("Lobby")
 	then
@@ -2015,6 +2020,7 @@ function WorldBuilder.Build(config: Config): Model
 	root:SetAttribute("ArenaCount", ARENA_COUNT)
 	root:SetAttribute("FieldStyle", config.World.FieldStyle)
 	root:SetAttribute("LayoutVersion", config.Version)
+	root:SetAttribute("BallRadius", config.Ball.Radius)
 	root:SetAttribute("RoomStateContract", table.concat(ROOM_STATES, ","))
 
 	createPannaDistrict(root, config.World)
