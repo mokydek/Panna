@@ -5,6 +5,7 @@ local Config = {
 
 	World = {
 		RootName = "PannaDistrict",
+		FieldStyle = "NaturalGrassFootballV1",
 		LobbyOrigin = Vector3.new(0, 0, -165),
 		LobbySpawn = CFrame.new(0, 4, -170),
 		MinimumArenaCount = 6,

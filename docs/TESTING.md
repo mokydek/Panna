@@ -12,8 +12,8 @@
 | `scripts/validate-project.ps1` | **пройдена: `36 OK / 0 WARN / 0 FAIL`** | Разрешённые Rojo-профили, canonical-проект, обязательные пути, secret-patterns и статические физические инварианты |
 | StyLua / Selene / Luau compile / `git diff --check` | **пройдены** | Форматирование, lint, компиляция Luau и whitespace-check завершились без ошибок |
 | Четыре существующих внутренних manifest build | **пройдены, 4/4** | `default`, `source`, `world` и `multiplayer` собраны Rojo с exit code 0 |
-| Roblox Studio CLI `RunScript` | **пройдена, exit code 0** | Маркер `PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6`; pure PD/Magnus и actuator lifecycle подтверждены без шага физики |
-| Запечённая модель Edit Mode | **пройдена с `PANNA_BAKE_OK`** | Единственный `PannaDistrict`; семь `PannaDribbleForce` и семь `PannaRollTorque` для шести арен и `TrainingBall` |
+| Roblox Studio CLI `RunScript` | **пройдена, exit code 0** | Маркер `PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6`; pure PD/Magnus, actuator lifecycle и natural-pitch контракт подтверждены без шага физики |
+| Запечённая модель Edit Mode | **пройдена с `PANNA_BAKE_OK`** | Единственный `PannaDistrict`; шесть зелёных Grass-полей без Neon, явная физика покрытий и семь комплектов физических actuator для мячей |
 | Исторический `StudioTestService` Local Server smoke (4 клиента, 2 комнаты) | пройден до переработки мяча | Четыре клиента физически активировали `EntryPrompt`, вошли в две независимые комнаты с разными `MatchId`, получили верные `ArenaId`/`InMatch`, а барьеры закрылись |
 | Текущий расширенный Local Server ball-smoke (4 клиента, 2 комнаты) | **заблокирован внешним запуском Studio** | Ограниченный прогон 120 секунд не подключил четыре клиента; дочерний локальный `universe 0` получил `GetPlaceSafetyInfoFailure`/`provisional rating 500`; нужен приватный staging Place |
 | Physical/goal/control чистые regression cases | **пройдены в Studio smoke** | Проверены bounded PD/Magnus, `VectorForce`/`Torque` lifecycle и ненулевые значения, no-snap, release/ownership, goal/scoping/cleanup; Heartbeat-отклик не симулировался |
@@ -72,7 +72,8 @@ PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6
 3. отсутствие старых transform-follow helper-функций и сохранение `Anchored = false` в `Reset`, `Controlled` и action-состояниях;
 4. наличие `PannaDribbleForce`/`PannaRollTorque`, их включение только в `Controlled`, обнуление при выходе и восстановление server network ownership;
 5. отсутствие прямого скачка transform при входе во владение, вызов action-импульса и корректный same-mode runtime reconciliation;
-6. прежние Low/Normal/Chip/Pass, tackle geometry, full-sphere `GoalMath`, дневную карту, шесть комнат, revision-scoping, RemoteRegistry и server cleanup.
+6. прежние Low/Normal/Chip/Pass, tackle geometry, full-sphere `GoalMath`, revision-scoping, RemoteRegistry и server cleanup;
+7. один `NaturalFootballDistrict`, `FieldStyle = NaturalGrassFootballV1`, шесть зелёных `Grass`-полей с одинаковой физикой, мягкий Bloom и полное отсутствие `Material = Neon` в мире.
 
 Edit `RunScript` не запускает обычный клиентский Play lifecycle и не шагает Heartbeat-сетевую физику. Поэтому smoke подтверждает рассчитанные ненулевые `VectorForce`/`Torque`, вызовы release/ownership и чистую математику, но не фактический отклик `ApplyImpulse`, движение PD-follow, obstacle `Spherecast`, первый приём или поведение при latency. Эти области и полный матч/реванш требуют Play/Local Server в доступном staging.
 
@@ -86,7 +87,7 @@ Edit `RunScript` не запускает обычный клиентский Pla
 
 Процесс строит place без статического корня через `source.project.json`, запускает `WorldBuilder` в Studio, извлекает детерминированный Rojo JSON в `src/world/PannaDistrict.model.json` и собирает `build/Panna-Football.rbxlx` через основной проект. Для отдельной проверки модели можно выполнить `rojo build world.project.json --output build/PannaDistrict.rbxmx`.
 
-Успех bake определяется маркером `PANNA_BAKE_OK`, а не только существованием выходного файла. Текущий дневной bake выдал этот маркер, обновил `src/world/PannaDistrict.model.json` и запёк в единственный `PannaDistrict` семь `PannaDribbleForce` и семь `PannaRollTorque`: шесть матчевых комплектов и `TrainingBall`. Автоматическая попытка обзорных PNG ранее не удалась из-за недоступности `StudioCaptureService` в headless `RunScript`, поэтому screenshot/device review не заявляется пройденным.
+Успех bake определяется маркером `PANNA_BAKE_OK`, а не только существованием выходного файла. Текущий натуральный дневной bake выдал этот маркер, обновил `src/world/PannaDistrict.model.json`, сохранил `CustomPhysicalProperties` полей и мячей и запёк в единственный `PannaDistrict` шесть зелёных арен и семь комплектов actuator: шесть матчевых и `TrainingBall`. Автоматическая попытка обзорных PNG ранее не удалась из-за недоступности `StudioCaptureService` в headless `RunScript`, поэтому screenshot/device review не заявляется пройденным.
 
 ## Как воспроизвести
 

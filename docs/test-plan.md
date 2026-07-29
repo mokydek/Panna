@@ -32,8 +32,8 @@
 | ID | Сценарий | Действия | Ожидаемый результат |
 | --- | --- | --- | --- |
 | S-01 | Холодный старт | Запустить сервер без сохранённых данных | Мир создан один раз, клиент получает snapshot, необработанных ошибок нет |
-| V-01 | Дневная сцена | Открыть canonical place в Edit Mode и Play на низкой/высокой графике | Один `PannaDistrict`, `DistrictStyle = BrightDayFootballDistrict`; дневной свет, мягкие тени, Atmosphere/ColorGrade/Bloom/SunRays не пересвечивают мяч, ворота, prompts и HUD |
-| V-02 | Покрытия и разметка | Обойти все шесть комнат и сверить Court/PitchFinish/markings | Concrete, SmoothPlastic/futsal и Grass соответствуют комнатам; видны touch/goal/center/penalty lines и круг; Parts не мешают мячу/персонажу и не создают лишнюю карту |
+| V-01 | Дневная сцена | Открыть canonical place в Edit Mode и Play на низкой/высокой графике | Один `PannaDistrict`, `DistrictStyle = NaturalFootballDistrict`, `FieldStyle = NaturalGrassFootballV1`; нейтральный дневной свет и минимальный Bloom не пересвечивают мяч, ворота, prompts и HUD |
+| V-02 | Покрытия и разметка | Обойти все шесть комнат и сверить Court/PitchFinish/markings | Каждый Court — зелёный Grass с одинаковой физикой и полосами покоса; видны touch/goal/center/penalty lines и круг; в мире нет BasePart с Material Neon, Parts не мешают мячу/персонажу |
 | Q-01 | Вход в очередь | Игрок A входит один | Атрибут/UI показывают ожидание, матч не стартует |
 | Q-02 | Отмена | A выходит из очереди | A удалён ровно один раз, следующий игрок не получает «призрачную» пару |
 | Q-03 | Повторный запрос | Быстро нажать вход несколько раз | В очереди остаётся одна запись, сервер не создаёт два матча |

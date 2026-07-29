@@ -29,6 +29,7 @@ local PROPERTY_CANDIDATES = {
 	"CastShadow",
 	"Color",
 	"Material",
+	"CustomPhysicalProperties",
 	"Reflectance",
 	"Transparency",
 	"Size",
@@ -121,6 +122,7 @@ local function encodeValue(value: any): any
 				elasticity = value.Elasticity,
 				frictionWeight = value.FrictionWeight,
 				elasticityWeight = value.ElasticityWeight,
+				acousticAbsorption = value.AcousticAbsorption,
 			},
 		}
 	end

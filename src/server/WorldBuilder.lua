@@ -5,6 +5,7 @@ local Workspace = game:GetService("Workspace")
 
 type WorldSettings = {
 	RootName: string,
+	FieldStyle: string,
 	LobbyOrigin: Vector3,
 	LobbySpawn: CFrame,
 	ArenaPositions: { CFrame },
@@ -35,22 +36,23 @@ type Config = {
 }
 
 local COLORS = table.freeze({
-	Asphalt = Color3.fromRGB(58, 67, 74),
-	Black = Color3.fromRGB(38, 49, 56),
-	Blue = Color3.fromRGB(56, 118, 255),
-	Concrete = Color3.fromRGB(126, 137, 145),
-	Cyan = Color3.fromRGB(34, 238, 255),
-	DarkGlass = Color3.fromRGB(54, 76, 83),
-	Green = Color3.fromRGB(46, 255, 160),
-	Orange = Color3.fromRGB(255, 142, 43),
-	Pink = Color3.fromRGB(255, 47, 161),
-	Purple = Color3.fromRGB(135, 76, 255),
+	Asphalt = Color3.fromRGB(66, 70, 72),
+	Black = Color3.fromRGB(43, 48, 46),
+	Blue = Color3.fromRGB(54, 93, 138),
+	Concrete = Color3.fromRGB(133, 137, 132),
+	Cyan = Color3.fromRGB(73, 119, 128),
+	DarkGlass = Color3.fromRGB(67, 78, 73),
+	Green = Color3.fromRGB(59, 116, 67),
+	Orange = Color3.fromRGB(177, 111, 55),
+	Pink = Color3.fromRGB(145, 72, 78),
+	Purple = Color3.fromRGB(91, 81, 108),
 	White = Color3.fromRGB(235, 247, 255),
-	Yellow = Color3.fromRGB(255, 226, 82),
+	Yellow = Color3.fromRGB(201, 169, 76),
 })
 
 local LIGHTING_EFFECT_ATTRIBUTE = "PannaDistrictBuilderEffect"
 local ARENA_COUNT = 6
+local PITCH_PHYSICAL_PROPERTIES = PhysicalProperties.new(1, 0.55, 0.05, 100, 100)
 local ROOM_STATES = table.freeze({ "Free", "Waiting", "Countdown", "Active", "Result" })
 local ARENA_ACCENTS = table.freeze({
 	COLORS.Cyan,
@@ -61,20 +63,20 @@ local ARENA_ACCENTS = table.freeze({
 	COLORS.Yellow,
 })
 local ARENA_NAMES = table.freeze({
-	"Concrete Cage",
-	"Neon Futsal",
-	"Club House",
-	"Industrial",
-	"Training Lab",
-	"Championship",
+	"Street Football",
+	"Community Pitch",
+	"Club Ground",
+	"Railway End",
+	"Training Ground",
+	"Championship Field",
 })
 local ARENA_COURTS = table.freeze({
-	{ Color = Color3.fromRGB(112, 119, 123), Material = Enum.Material.Concrete },
-	{ Color = Color3.fromRGB(41, 119, 164), Material = Enum.Material.SmoothPlastic },
-	{ Color = Color3.fromRGB(54, 139, 76), Material = Enum.Material.Grass },
-	{ Color = Color3.fromRGB(105, 113, 120), Material = Enum.Material.Concrete },
-	{ Color = Color3.fromRGB(47, 143, 136), Material = Enum.Material.SmoothPlastic },
-	{ Color = Color3.fromRGB(42, 130, 68), Material = Enum.Material.Grass },
+	{ Color = Color3.fromRGB(55, 126, 63), Material = Enum.Material.Grass },
+	{ Color = Color3.fromRGB(62, 136, 69), Material = Enum.Material.Grass },
+	{ Color = Color3.fromRGB(49, 119, 57), Material = Enum.Material.Grass },
+	{ Color = Color3.fromRGB(58, 128, 64), Material = Enum.Material.Grass },
+	{ Color = Color3.fromRGB(65, 141, 72), Material = Enum.Material.Grass },
+	{ Color = Color3.fromRGB(46, 113, 54), Material = Enum.Material.Grass },
 })
 
 local WorldBuilder = {}
@@ -144,7 +146,7 @@ local function createBillboardSign(
 		Vector3.new(width + 0.45, 4.25, 0.18),
 		cframe * CFrame.new(0, 0, 0.28),
 		color,
-		Enum.Material.Neon
+		Enum.Material.Metal
 	)
 	trim.CanCollide = false
 
@@ -326,9 +328,10 @@ local function createLamp(
 		Vector3.new(2.8, 0.45, 1.25),
 		cframe * CFrame.new(0, height, 0),
 		color,
-		Enum.Material.Neon
+		Enum.Material.Glass
 	)
 	lamp.CanCollide = false
+	lamp.Transparency = 0.12
 	addPointLight(lamp, color, 34, 0.42)
 end
 
@@ -444,7 +447,7 @@ local function createPitchFinish(
 	finish.Name = "PitchFinish"
 	finish.Parent = parent
 
-	local stripeCount = 8
+	local stripeCount = 10
 	local stripeLength = world.ArenaLength / stripeCount
 	for index = 1, stripeCount do
 		if index % 2 == 0 then
@@ -454,10 +457,7 @@ local function createPitchFinish(
 				Vector3.new(world.ArenaWidth - 1.2, 0.025, stripeLength),
 				origin
 					* CFrame.new(0, 0.018, -world.ArenaLength * 0.5 + stripeLength * (index - 0.5)),
-				baseColor:Lerp(
-					Color3.new(1, 1, 1),
-					if material == Enum.Material.Grass then 0.055 else 0.035
-				),
+				baseColor:Lerp(Color3.new(1, 1, 1), 0.045),
 				material
 			)
 			stripe.CanCollide = false
@@ -579,7 +579,7 @@ local function createGoalFrame(
 		Vector3.new(world.GoalWidth, world.GoalHeight, 0.2),
 		origin * CFrame.new(0, world.GoalHeight * 0.5, backZ),
 		COLORS.White,
-		Enum.Material.ForceField
+		Enum.Material.Fabric
 	)
 	backNet.Transparency = 0.72
 
@@ -595,7 +595,7 @@ local function createGoalFrame(
 					goalCenterZ
 				),
 			COLORS.White,
-			Enum.Material.ForceField
+			Enum.Material.Fabric
 		)
 		sideNet.Transparency = 0.78
 	end
@@ -606,7 +606,7 @@ local function createGoalFrame(
 		Vector3.new(world.GoalWidth, 0.2, world.GoalDepth),
 		origin * CFrame.new(0, world.GoalHeight, goalCenterZ),
 		COLORS.White,
-		Enum.Material.ForceField
+		Enum.Material.Fabric
 	)
 	topNet.Transparency = 0.78
 
@@ -615,7 +615,7 @@ local function createGoalFrame(
 		"GoalFloor",
 		Vector3.new(world.GoalWidth, 0.45, world.GoalDepth),
 		origin * CFrame.new(0, -0.2, goalCenterZ),
-		Color3.fromRGB(92, 109, 96),
+		Color3.fromRGB(48, 112, 56),
 		Enum.Material.Grass
 	)
 	local teamAccent = createPart(
@@ -649,7 +649,7 @@ local function createFence(
 
 	for _, xDirection in { -1, 1 } do
 		local sideName = if xDirection < 0 then "Left" else "Right"
-		local railColor = if xDirection < 0 then COLORS.Cyan else COLORS.Pink
+		local railColor = Color3.fromRGB(70, 78, 73)
 		if xDirection == streetDirection then
 			local segmentLength = (world.ArenaLength - entranceWidth) * 0.5
 			local segmentOffset = entranceWidth * 0.5 + segmentLength * 0.5
@@ -671,7 +671,7 @@ local function createFence(
 				sidePanel.Transparency = 0.58
 				createPart(
 					model,
-					sideName .. "NeonRail" .. suffix,
+					sideName .. "BoundaryRail" .. suffix,
 					Vector3.new(0.3, 0.3, segmentLength),
 					origin
 						* CFrame.new(
@@ -680,7 +680,7 @@ local function createFence(
 							zDirection * segmentOffset
 						),
 					railColor,
-					Enum.Material.Neon
+					Enum.Material.Metal
 				)
 			end
 		else
@@ -695,11 +695,11 @@ local function createFence(
 			sidePanel.Transparency = 0.58
 			createPart(
 				model,
-				sideName .. "NeonRail",
+				sideName .. "BoundaryRail",
 				Vector3.new(0.3, 0.3, world.ArenaLength + 1),
 				origin * CFrame.new(xDirection * (halfWidth + 0.4), 0.45, 0),
 				railColor,
-				Enum.Material.Neon
+				Enum.Material.Metal
 			)
 		end
 	end
@@ -862,12 +862,13 @@ local function createRoomLifecycle(
 			side .. "WaitingPad",
 			Vector3.new(4.4, 0.12, 5.4),
 			origin * CFrame.new(deckX, 0.51, zDirection * 4.2),
-			if side == "Home" then COLORS.Cyan else COLORS.Pink,
-			Enum.Material.Neon
+			if side == "Home" then COLORS.Blue else COLORS.Pink,
+			Enum.Material.SmoothPlastic
 		)
 		pad.CanCollide = false
 		pad.CanTouch = false
 		pad.CanQuery = false
+		pad.Transparency = 0.14
 	end
 
 	createWaitingMarker(
@@ -929,9 +930,9 @@ local function createRoomLifecycle(
 		Vector3.new(0.5, 5.5, 11.8),
 		origin * CFrame.new(streetDirection * (halfWidth + 0.2), 2.75, 0),
 		accent,
-		Enum.Material.ForceField
+		Enum.Material.Glass
 	)
-	barrier.Transparency = 0.58
+	barrier.Transparency = 0.72
 	barrier.CanCollide = false
 	barrier.CanTouch = false
 	barrier:SetAttribute("ArenaId", arenaId)
@@ -972,11 +973,11 @@ local function createArenaThemeDecor(
 		for _, zDirection in { -1, 1 } do
 			createPart(
 				theme,
-				if zDirection < 0 then "NeonCrossbeamSouth" else "NeonCrossbeamNorth",
+				if zDirection < 0 then "CommunityCrossbeamSouth" else "CommunityCrossbeamNorth",
 				Vector3.new(world.ArenaWidth + 5, 0.45, 0.45),
 				origin * CFrame.new(0, world.FenceHeight + 3, zDirection * 18),
 				accent,
-				Enum.Material.Neon
+				Enum.Material.Metal
 			)
 		end
 	elseif index == 3 then
@@ -1016,8 +1017,8 @@ local function createArenaThemeDecor(
 				string.format("LabPanel_%d", panelIndex),
 				Vector3.new(0.3, 5.5, 8),
 				origin * CFrame.new(outerDirection * (halfWidth + 1), 7, z),
-				if panelIndex % 2 == 0 then COLORS.Green else COLORS.Cyan,
-				Enum.Material.Neon
+				if panelIndex % 2 == 0 then COLORS.Green else COLORS.Blue,
+				Enum.Material.SmoothPlastic
 			)
 			panel.Transparency = 0.32
 			panel.CanCollide = false
@@ -1035,7 +1036,7 @@ local function createArenaThemeDecor(
 						zDirection * 22
 					),
 				COLORS.Yellow,
-				Enum.Material.Neon
+				Enum.Material.Fabric
 			)
 		end
 		createPart(
@@ -1044,7 +1045,7 @@ local function createArenaThemeDecor(
 			Vector3.new(world.ArenaWidth + 4, 0.8, 0.8),
 			origin * CFrame.new(0, world.FenceHeight + 4.5, 0),
 			COLORS.Yellow,
-			Enum.Material.Neon
+			Enum.Material.Metal
 		)
 	end
 end
@@ -1072,6 +1073,7 @@ local function createArena(
 	model:SetAttribute("AwayUserId", 0)
 	model:SetAttribute("RoomIndex", index)
 	model:SetAttribute("RoomTitle", roomTitle)
+	model:SetAttribute("PitchStyle", world.FieldStyle)
 	model:SetAttribute("WaitingCount", 0)
 	model.Parent = arenasFolder
 
@@ -1088,6 +1090,7 @@ local function createArena(
 		courtStyle.Color,
 		courtStyle.Material
 	)
+	floor.CustomPhysicalProperties = PITCH_PHYSICAL_PROPERTIES
 	model.PrimaryPart = floor
 	createPitchFinish(model, origin, world, courtStyle.Color, courtStyle.Material)
 	createPitchBoundaryAndBoxes(model, origin, world)
@@ -1265,7 +1268,7 @@ local function createTrainingZone(lobby: Model, origin: CFrame, ballSettings: Ba
 			Vector3.new(3.8, 3.8, 0.22),
 			zoneOrigin * CFrame.new(x, 3.5, -17.35),
 			targetColor,
-			Enum.Material.Neon
+			Enum.Material.SmoothPlastic
 		)
 		target.CanCollide = false
 		target:SetAttribute("TrainingTarget", true)
@@ -1328,7 +1331,7 @@ local function createFacilityKiosk(
 			Vector3.new(0.8, 8.6, 0.8),
 			origin * CFrame.new(xDirection * 10.5, 4.3, -7.2),
 			accent,
-			Enum.Material.Neon
+			Enum.Material.Metal
 		)
 	end
 	createPart(
@@ -1388,7 +1391,7 @@ local function createTrophyCorner(parent: Instance, origin: CFrame)
 			Vector3.new(1.8, 1.8, 1.8),
 			origin * CFrame.new(x, 1.4 + height + 0.8, 0),
 			if index == 1 then COLORS.Cyan elseif index == 2 then COLORS.Yellow else COLORS.Pink,
-			Enum.Material.Neon
+			Enum.Material.SmoothPlastic
 		)
 		ball.Shape = Enum.PartType.Ball
 		ball.CanCollide = false
@@ -1461,7 +1464,7 @@ local function createStreetDecor(lobby: Model, origin: CFrame)
 				* CFrame.new(-34 + index * 7, 3 + (index % 3) * 1.65, -33.6)
 				* CFrame.Angles(0, 0, math.rad(if index % 2 == 0 then 18 else -18)),
 			color,
-			Enum.Material.Neon
+			Enum.Material.SmoothPlastic
 		)
 		stripe.CanCollide = false
 	end
@@ -1515,7 +1518,7 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 			Vector3.new(0.45, 0.35, 74),
 			origin * CFrame.new(xDirection * 74.7, 0.18, 0),
 			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
-			Enum.Material.Neon
+			Enum.Material.Metal
 		)
 	end
 
@@ -1540,7 +1543,7 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 		Vector3.new(14, 0.55, 11),
 		queueOrigin * CFrame.new(0, 0.28, 0),
 		COLORS.Purple,
-		Enum.Material.Neon
+		Enum.Material.SmoothPlastic
 	)
 	queuePad.Transparency = 0.1
 	queuePad:SetAttribute("QueueMode", "1v1")
@@ -1556,7 +1559,7 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 			Vector3.new(0.75, 8, 0.75),
 			queueOrigin * CFrame.new(xDirection * 7.3, 4, 0),
 			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
-			Enum.Material.Neon
+			Enum.Material.Metal
 		)
 	end
 	createPart(
@@ -1565,7 +1568,7 @@ local function createLobby(root: Model, world: WorldSettings, ballSettings: Ball
 		Vector3.new(15.35, 0.75, 0.75),
 		queueOrigin * CFrame.new(0, 8, 0),
 		COLORS.Purple,
-		Enum.Material.Neon
+		Enum.Material.Metal
 	)
 	createBillboardSign(
 		lobby,
@@ -1622,7 +1625,7 @@ local function createEndLandmark(parent: Instance, origin: CFrame)
 			Vector3.new(3, 20, 3),
 			origin * CFrame.new(xDirection * 14, 10, 0),
 			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
-			Enum.Material.Neon
+			Enum.Material.Metal
 		)
 		createPart(
 			landmark,
@@ -1639,7 +1642,7 @@ local function createEndLandmark(parent: Instance, origin: CFrame)
 		Vector3.new(31, 2, 3),
 		origin * CFrame.new(0, 20, 0),
 		COLORS.Yellow,
-		Enum.Material.Neon
+		Enum.Material.Metal
 	)
 	local crownBall = createPart(
 		landmark,
@@ -1647,7 +1650,7 @@ local function createEndLandmark(parent: Instance, origin: CFrame)
 		Vector3.new(6, 6, 6),
 		origin * CFrame.new(0, 25, 0),
 		COLORS.White,
-		Enum.Material.Neon
+		Enum.Material.SmoothPlastic
 	)
 	crownBall.Shape = Enum.PartType.Ball
 	crownBall.CanCollide = false
@@ -1664,7 +1667,8 @@ end
 local function createPannaDistrict(root: Model, world: WorldSettings): Model
 	local district = Instance.new("Model")
 	district.Name = "DistrictEnvironment"
-	district:SetAttribute("DistrictStyle", "BrightDayFootballDistrict")
+	district:SetAttribute("DistrictStyle", "NaturalFootballDistrict")
+	district:SetAttribute("FieldStyle", world.FieldStyle)
 	district:SetAttribute("ExternalAssetCount", 0)
 	district.Parent = root
 
@@ -1707,11 +1711,11 @@ local function createPannaDistrict(root: Model, world: WorldSettings): Model
 		)
 		createPart(
 			street,
-			if xDirection < 0 then "WestCurbNeon" else "EastCurbNeon",
+			if xDirection < 0 then "WestCurbLine" else "EastCurbLine",
 			Vector3.new(0.3, 0.16, streetLength),
 			CFrame.new(xDirection * 15.1, 0.09, centerZ),
 			if xDirection < 0 then COLORS.Cyan else COLORS.Pink,
-			Enum.Material.Neon
+			Enum.Material.SmoothPlastic
 		)
 	end
 
@@ -1727,7 +1731,7 @@ local function createPannaDistrict(root: Model, world: WorldSettings): Model
 			Vector3.new(0.24, 0.08, 8),
 			CFrame.new(0, 0.08, z),
 			COLORS.Yellow,
-			Enum.Material.Neon
+			Enum.Material.SmoothPlastic
 		)
 		marker.CanCollide = false
 		marker.CanTouch = false
@@ -1814,7 +1818,7 @@ local function createPannaDistrict(root: Model, world: WorldSettings): Model
 						z + zEdge * (blockLength * 0.5 + 0.12)
 					),
 					roofAccent,
-					Enum.Material.Neon
+					Enum.Material.Metal
 				)
 				rail.CanCollide = false
 				rail.CanTouch = false
@@ -1832,7 +1836,7 @@ local function createPannaDistrict(root: Model, world: WorldSettings): Model
 					Vector3.new(0.24, 0.24, blockLength + 0.4),
 					CFrame.new(xDirection * 99 + xEdge * 14.22, height + 0.02, z),
 					roofAccent,
-					Enum.Material.Neon
+					Enum.Material.Metal
 				)
 				rail.CanCollide = false
 				rail.CanTouch = false
@@ -1846,15 +1850,15 @@ local function createPannaDistrict(root: Model, world: WorldSettings): Model
 end
 
 local function configureLighting()
-	Lighting.ClockTime = 14.15
-	Lighting.Brightness = 3
-	Lighting.ExposureCompensation = 0.18
-	Lighting.Ambient = Color3.fromRGB(144, 158, 174)
-	Lighting.OutdoorAmbient = Color3.fromRGB(176, 190, 205)
-	Lighting.EnvironmentDiffuseScale = 0.72
-	Lighting.EnvironmentSpecularScale = 0.5
+	Lighting.ClockTime = 13.8
+	Lighting.Brightness = 2.65
+	Lighting.ExposureCompensation = 0.05
+	Lighting.Ambient = Color3.fromRGB(137, 148, 142)
+	Lighting.OutdoorAmbient = Color3.fromRGB(169, 181, 174)
+	Lighting.EnvironmentDiffuseScale = 0.8
+	Lighting.EnvironmentSpecularScale = 0.35
 	Lighting.GlobalShadows = true
-	Lighting.ShadowSoftness = 0.55
+	Lighting.ShadowSoftness = 0.45
 
 	local atmosphere: Atmosphere? = nil
 	local colorCorrection: ColorCorrectionEffect? = nil
@@ -1880,12 +1884,12 @@ local function configureLighting()
 		atmosphere:SetAttribute(LIGHTING_EFFECT_ATTRIBUTE, true)
 		atmosphere.Parent = Lighting
 	end
-	atmosphere.Density = 0.18
-	atmosphere.Offset = 0.2
-	atmosphere.Color = Color3.fromRGB(199, 225, 255)
-	atmosphere.Decay = Color3.fromRGB(121, 157, 190)
-	atmosphere.Glare = 0.06
-	atmosphere.Haze = 0.65
+	atmosphere.Density = 0.12
+	atmosphere.Offset = 0.15
+	atmosphere.Color = Color3.fromRGB(207, 224, 236)
+	atmosphere.Decay = Color3.fromRGB(145, 167, 174)
+	atmosphere.Glare = 0.02
+	atmosphere.Haze = 0.4
 
 	if not colorCorrection then
 		colorCorrection = Instance.new("ColorCorrectionEffect")
@@ -1893,20 +1897,21 @@ local function configureLighting()
 		colorCorrection:SetAttribute(LIGHTING_EFFECT_ATTRIBUTE, true)
 		colorCorrection.Parent = Lighting
 	end
-	colorCorrection.Brightness = 0.04
-	colorCorrection.Contrast = 0.06
-	colorCorrection.Saturation = 0.08
-	colorCorrection.TintColor = Color3.fromRGB(255, 248, 235)
+	colorCorrection.Brightness = 0.01
+	colorCorrection.Contrast = 0.04
+	colorCorrection.Saturation = 0.02
+	colorCorrection.TintColor = Color3.fromRGB(255, 252, 245)
 
 	if not bloom then
 		bloom = Instance.new("BloomEffect")
-		bloom.Name = "PannaNeonBloom"
+		bloom.Name = "PannaSoftBloom"
 		bloom:SetAttribute(LIGHTING_EFFECT_ATTRIBUTE, true)
 		bloom.Parent = Lighting
 	end
-	bloom.Intensity = 0.12
-	bloom.Size = 18
-	bloom.Threshold = 1.4
+	bloom.Name = "PannaSoftBloom"
+	bloom.Intensity = 0.04
+	bloom.Size = 12
+	bloom.Threshold = 2
 
 	if not sunRays then
 		sunRays = Instance.new("SunRaysEffect")
@@ -1914,14 +1919,15 @@ local function configureLighting()
 		sunRays:SetAttribute(LIGHTING_EFFECT_ATTRIBUTE, true)
 		sunRays.Parent = Lighting
 	end
-	sunRays.Intensity = 0.035
-	sunRays.Spread = 0.72
+	sunRays.Intensity = 0.025
+	sunRays.Spread = 0.65
 end
 
 local function validateConfig(config: Config)
 	local world = config.World
 	local ball = config.Ball
 	assert(world.RootName ~= "", "Config.World.RootName must not be empty")
+	assert(world.FieldStyle ~= "", "Config.World.FieldStyle must not be empty")
 	assert(
 		#world.ArenaPositions >= ARENA_COUNT,
 		string.format("Config.World.ArenaPositions must contain at least %d arenas", ARENA_COUNT)
@@ -1947,7 +1953,7 @@ local function validateConfig(config: Config)
 	)
 end
 
-local function configureBallPhysics(root: Model, ballSettings: BallSettings)
+local function configureWorldPhysics(root: Model, ballSettings: BallSettings)
 	local physicalProperties = PhysicalProperties.new(
 		ballSettings.Density,
 		ballSettings.Friction,
@@ -1956,11 +1962,12 @@ local function configureBallPhysics(root: Model, ballSettings: BallSettings)
 		1
 	)
 	for _, descendant in root:GetDescendants() do
-		if
-			descendant:IsA("BasePart")
-			and (descendant.Name == "Ball" or descendant:GetAttribute("TrainingBall") == true)
-		then
-			descendant.CustomPhysicalProperties = physicalProperties
+		if descendant:IsA("BasePart") then
+			if descendant.Name == "Ball" or descendant:GetAttribute("TrainingBall") == true then
+				descendant.CustomPhysicalProperties = physicalProperties
+			elseif descendant.Name == "Court" then
+				descendant.CustomPhysicalProperties = PITCH_PHYSICAL_PROPERTIES
+			end
 		end
 	end
 end
@@ -1971,6 +1978,7 @@ local function isCompatibleBakedDistrict(candidate: Instance, config: Config): b
 	end
 	if
 		candidate:GetAttribute("LayoutVersion") ~= config.Version
+		or candidate:GetAttribute("FieldStyle") ~= config.World.FieldStyle
 		or candidate:GetAttribute("ArenaCount") ~= ARENA_COUNT
 		or not candidate:FindFirstChild("DistrictEnvironment")
 		or not candidate:FindFirstChild("Lobby")
@@ -1994,7 +2002,7 @@ function WorldBuilder.Build(config: Config): Model
 	validateConfig(config)
 	local existingRoot = Workspace:FindFirstChild(config.World.RootName)
 	if existingRoot and isCompatibleBakedDistrict(existingRoot, config) then
-		configureBallPhysics(existingRoot, config.Ball)
+		configureWorldPhysics(existingRoot, config.Ball)
 		configureLighting()
 		return existingRoot
 	end
@@ -2005,6 +2013,7 @@ function WorldBuilder.Build(config: Config): Model
 	root:SetAttribute("DistrictName", "PannaDistrict")
 	root:SetAttribute("GeneratedBy", "WorldBuilder")
 	root:SetAttribute("ArenaCount", ARENA_COUNT)
+	root:SetAttribute("FieldStyle", config.World.FieldStyle)
 	root:SetAttribute("LayoutVersion", config.Version)
 	root:SetAttribute("RoomStateContract", table.concat(ROOM_STATES, ","))
 
@@ -2024,7 +2033,7 @@ function WorldBuilder.Build(config: Config): Model
 		)
 	end
 
-	configureBallPhysics(root, config.Ball)
+	configureWorldPhysics(root, config.Ball)
 	if existingRoot then
 		existingRoot:Destroy()
 	end

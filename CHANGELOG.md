@@ -10,9 +10,9 @@
 - Начальная основа репозитория Panna Football.
 - Строгие общие типы, единые имена Remote и конфигурация баланса.
 - Процедурный район `PannaDistrict` из стандартных Roblox Instances: непрерывная центральная улица, лобби, шесть независимых 1v1-комнат, Training, Shop, Locker, Trophy и Rest-зоны, без внешних ассетов.
-- Шесть оригинальных тем комнат: Concrete Cage, Neon Futsal, Club House, Industrial, Training Lab и Championship.
-- Светлый стиль `BrightDayFootballDistrict`: дневной Lighting, более мягкие тени, воздушная перспектива, тёплая цветокоррекция, умеренные Bloom и `PannaSunRays`.
-- Разные покрытия арен (Concrete, SmoothPlastic/futsal и Grass), полосы покрытия, боковые/голевые линии, центральная линия/точка/круг и штрафные зоны.
+- Шесть натуральных футбольных тем комнат: Street Football, Community Pitch, Club Ground, Railway End, Training Ground и Championship Field.
+- Дневной стиль `NaturalFootballDistrict`: нейтральный Lighting, мягкие тени, спокойная цветокоррекция, минимальный `PannaSoftBloom` и `PannaSunRays`.
+- Все шесть арен переведены на зелёный `Grass` с одинаковыми физическими свойствами, полосами покоса, боковыми/голевыми линиями, центральной линией/точкой/кругом и штрафными зонами; `Neon` и `ForceField` удалены из визуала мира.
 - Комнатный цикл `Free → Waiting → Countdown → Active → Result` с зонами входа/выхода, местами ожидания, барьером, табло и spectator-зоной.
 - Локальная очередь 1v1, резервирование арены, countdown, основное время, overtime/golden goal, голевой reset, результат и реванш по согласию обоих игроков.
 - Серверно-авторитетная машина состояний мяча `Free / Controlled / Contested / Shot / Flight / Bounce / Reset` с `BallRevision`, владельцем, последним касанием и диагностикой последнего действия.

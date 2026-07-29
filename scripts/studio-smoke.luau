@@ -555,18 +555,29 @@ expect(world.Name == config.World.RootName, "world root name does not match conf
 expect(world.Name == "PannaDistrict", "district root must be named PannaDistrict")
 expect(world:GetAttribute("ArenaCount") == 6, "district must declare six arenas")
 expect(world:GetAttribute("DistrictName") == "PannaDistrict", "district identity is missing")
+expect(
+	world:GetAttribute("FieldStyle") == config.World.FieldStyle,
+	"district field style does not match Config"
+)
 local environment = world:FindFirstChild("DistrictEnvironment")
 expect(environment ~= nil and environment:IsA("Model"), "DistrictEnvironment is missing")
 expect(
-	environment:GetAttribute("DistrictStyle") == "BrightDayFootballDistrict",
-	"district did not use the bright football visual style"
+	environment:GetAttribute("DistrictStyle") == "NaturalFootballDistrict",
+	"district did not use the natural football visual style"
+)
+expect(
+	environment:GetAttribute("FieldStyle") == config.World.FieldStyle,
+	"environment field style does not match Config"
 )
 expect(
 	Lighting.ClockTime >= 12 and Lighting.ClockTime <= 16,
 	"district is not configured for daylight"
 )
-expect(Lighting.Brightness >= 2.8, "daylight brightness is too low")
+expect(Lighting.Brightness >= 2.5, "daylight brightness is too low")
 expect(Lighting:FindFirstChild("PannaSunRays") ~= nil, "daylight sun rays are missing")
+local softBloom = Lighting:FindFirstChild("PannaSoftBloom")
+expect(softBloom ~= nil and softBloom:IsA("BloomEffect"), "soft daylight bloom is missing")
+expect((softBloom :: BloomEffect).Intensity <= 0.05, "daylight bloom is too strong")
 local lobbySpawn = world:FindFirstChild("LobbySpawn", true)
 expect(lobbySpawn ~= nil and lobbySpawn:IsA("BasePart"), "LobbySpawn is missing")
 expect(world:FindFirstChild("QueuePrompt", true) ~= nil, "QueuePrompt is missing")
@@ -605,12 +616,12 @@ local arenaList = arenas:GetAll()
 expect(#arenaList == 6, "expected exactly six physical 1v1 rooms")
 
 local expectedRoomTitles = {
-	["Concrete Cage"] = true,
-	["Neon Futsal"] = true,
-	["Club House"] = true,
-	Industrial = true,
-	["Training Lab"] = true,
-	Championship = true,
+	["Street Football"] = true,
+	["Community Pitch"] = true,
+	["Club Ground"] = true,
+	["Railway End"] = true,
+	["Training Ground"] = true,
+	["Championship Field"] = true,
 }
 
 for _, arena in arenaList do
@@ -621,6 +632,10 @@ for _, arena in arenaList do
 		arena.Id .. " has an invalid room title"
 	)
 	expectedRoomTitles[roomTitle] = nil
+	expect(
+		arena.Model:GetAttribute("PitchStyle") == config.World.FieldStyle,
+		arena.Id .. " pitch style does not match Config"
+	)
 	expect(arena.Model:GetAttribute("ArenaState") == "Free", arena.Id .. " must start Free")
 	expect(arena.Model:GetAttribute("WaitingCount") == 0, arena.Id .. " has stale waiting state")
 	for _, partName in
@@ -652,7 +667,28 @@ for _, arena in arenaList do
 	expect(arena.EntryPrompt.Enabled, arena.Id .. " EntryPrompt must be enabled while Free")
 	expect(not arena.ExitPrompt.Enabled, arena.Id .. " ExitPrompt must be disabled while Free")
 	expect(not arena.Barrier.CanCollide, arena.Id .. " Barrier must be open while Free")
-	expect(arena.Model:FindFirstChild("PitchFinish") ~= nil, arena.Id .. " pitch finish missing")
+	local court = arena.Model:FindFirstChild("Court")
+	expect(court ~= nil and court:IsA("BasePart"), arena.Id .. " court is missing")
+	local pitch = court :: BasePart
+	expect(pitch.Material == Enum.Material.Grass, arena.Id .. " court must use natural grass")
+	expect(
+		pitch.Color.G > pitch.Color.R * 1.6 and pitch.Color.G > pitch.Color.B * 1.5,
+		arena.Id .. " court is not a natural readable green"
+	)
+	local pitchProperties = pitch.CustomPhysicalProperties
+	expect(pitchProperties ~= nil, arena.Id .. " court must define consistent physical properties")
+	expect(
+		math.abs((pitchProperties :: PhysicalProperties).Friction - 0.55) < 1e-4,
+		arena.Id .. " court friction differs from the natural-pitch contract"
+	)
+	local pitchFinish = arena.Model:FindFirstChild("PitchFinish")
+	expect(pitchFinish ~= nil and pitchFinish:IsA("Model"), arena.Id .. " pitch finish missing")
+	for _, stripe in (pitchFinish :: Model):GetChildren() do
+		expect(
+			stripe:IsA("BasePart") and stripe.Material == Enum.Material.Grass,
+			arena.Id .. " mowing stripe must use grass"
+		)
+	end
 	expect(arena.Model:FindFirstChild("LeftTouchLine") ~= nil, arena.Id .. " touch line missing")
 	expect(arena.Model:FindFirstChild("HomePenaltyLine") ~= nil, arena.Id .. " penalty box missing")
 	for _, goalName in { "HomeGoalFrame", "AwayGoalFrame" } do
@@ -743,6 +779,14 @@ for _, arena in arenaList do
 end
 
 expect(next(expectedRoomTitles) == nil, "not all six named room themes were created")
+for _, descendant in world:GetDescendants() do
+	if descendant:IsA("BasePart") then
+		expect(
+			descendant.Material ~= Enum.Material.Neon,
+			descendant:GetFullName() .. " still uses Neon"
+		)
+	end
+end
 for _, arenaPosition in config.World.ArenaPositions do
 	expect(
 		arenaPosition.Position.Z >= streetStart and arenaPosition.Position.Z <= streetEnd,

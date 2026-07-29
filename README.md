@@ -8,7 +8,7 @@ Panna Football — ранний многопользовательский пр�
 
 - проект Rojo с раздельными серверным, клиентским и общим слоями;
 - процедурный район `PannaDistrict`: непрерывная центральная улица, лобби, шесть независимых 1v1-комнат, тренировочная и сервисные зоны;
-- светлый дневной район `BrightDayFootballDistrict` с `Atmosphere`, цветокоррекцией, умеренными Bloom/SunRays, более читаемыми футбольными входами и шестью площадками с разными покрытиями — Concrete Cage, Neon Futsal, Club House, Industrial, Training Lab и Championship — без внешних моделей и скриптов;
+- натуральный дневной район `NaturalFootballDistrict`: шесть зелёных травяных полей с полосами покоса, белой разметкой, матовыми металлическими бортами, обычными сетками и приглушённой футбольной палитрой без `Neon` — Street Football, Community Pitch, Club Ground, Railway End, Training Ground и Championship Field;
 - вход и выход через комнатные зоны, места ожидания, барьеры, табло статуса и безопасные spectator-зоны;
 - очередь 1v1 и распределение по свободным аренам;
 - серверно-авторитетные состояния матча, счёт, таймер, голы и возврат игроков;
@@ -76,7 +76,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/validate-project.p
 
 Скрипт ничего не изменяет. Он проверяет JSON-проект Rojo, обязательные пути, ссылки `$path`, известные форматы секретов и базовый баланс скобок/блоков в Luau. Это быстрая эвристика, а не замена Rojo, Selene, Luau typecheck и тестам Roblox Studio.
 
-Текущий Studio CLI `RunScript` завершился с exit code 0 и маркером `PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6`. Он подтвердил чистые границы PD/Magnus, runtime lifecycle `PannaDribbleForce`/`PannaRollTorque`, ненулевые рассчитанные force/torque в `Controlled`, отсутствие CFrame-snap, физический release/server ownership, `GoalMath`, revision-scoping и server-cleanup. Edit `RunScript` не шагает Roblox-физику: фактический отклик `ApplyImpulse`, Heartbeat-follow, obstacle `Spherecast`, столкновения и поведение при latency всё ещё требуют Play/Local Server в staging.
+Текущий Studio CLI `RunScript` завершился с exit code 0 и маркером `PANNA_STUDIO_SMOKE_OK version=0.2.0-alpha arenas=6`. Он подтвердил зелёный Grass и одинаковую физику всех шести полей, отсутствие Neon, чистые границы PD/Magnus, runtime lifecycle `PannaDribbleForce`/`PannaRollTorque`, ненулевые рассчитанные force/torque в `Controlled`, отсутствие CFrame-snap, физический release/server ownership, `GoalMath`, revision-scoping и server-cleanup. Edit `RunScript` не шагает Roblox-физику: фактический отклик `ApplyImpulse`, Heartbeat-follow, obstacle `Spherecast`, столкновения и поведение при latency всё ещё требуют Play/Local Server в staging.
 
 Для автоматизированного многоклиентного прогона используется внутренний профиль `multiplayer.project.json`. Он добавляет тестовые server/client-скрипты к тому же коду и карте; они не входят в основной `default.project.json`. Расширенный сценарий проверяет два заряжаемых паса, revisions, изоляцию и 144 некорректных запроса. Текущая ограниченная 120-секундная попытка на Studio `0.732.0.7321040` снова не смогла подключить четыре клиента: дочерний локальный `universe 0` получил `provisional rating 500`/`GetPlaceSafetyInfoFailure`. Это внешний блокер до проверки механик, а не успешный результат; повтор нужен в приватном staging Place.
 

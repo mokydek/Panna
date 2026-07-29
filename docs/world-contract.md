@@ -36,12 +36,12 @@ Workspace
     │   │   └── RestZone (Model)
     │   └── StreetDecor (Model)
     └── Arenas (Folder)
-        ├── Arena_1 (Model: Concrete Cage)
-        ├── Arena_2 (Model: Neon Futsal)
-        ├── Arena_3 (Model: Club House)
-        ├── Arena_4 (Model: Industrial)
-        ├── Arena_5 (Model: Training Lab)
-        └── Arena_6 (Model: Championship)
+        ├── Arena_1 (Model: Street Football)
+        ├── Arena_2 (Model: Community Pitch)
+        ├── Arena_3 (Model: Club Ground)
+        ├── Arena_4 (Model: Railway End)
+        ├── Arena_5 (Model: Training Ground)
+        └── Arena_6 (Model: Championship Field)
 ```
 
 `CentralStreet` непрерывно идёт от точки появления мимо трёх пар комнат к `EndLandmark`. Комнаты располагаются слева и справа от улицы; у каждой есть переход и собственная уличная точка возврата.
@@ -67,10 +67,11 @@ Workspace
 - `GeneratedBy = "WorldBuilder"`;
 - `DistrictName = "PannaDistrict"`;
 - `ArenaCount = 6`;
+- `FieldStyle = Config.World.FieldStyle`;
 - `LayoutVersion = Config.Version`;
 - `RoomStateContract = "Free,Waiting,Countdown,Active,Result"`.
 
-`DistrictEnvironment` имеет `DistrictStyle = "BrightDayFootballDistrict"` и `ExternalAssetCount = 0`; у `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`.
+`PannaDistrict` и `DistrictEnvironment` имеют `FieldStyle = "NaturalGrassFootballV1"`; `DistrictEnvironment` также имеет `DistrictStyle = "NaturalFootballDistrict"` и `ExternalAssetCount = 0`. У `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`. Отсутствующий или несовпадающий `FieldStyle` делает старый bake несовместимым и заставляет builder безопасно пересобрать ту же сцену.
 
 `QueuePad` и `QueuePrompt` имеют `QueueMode = "1v1"`. UI-кнопка быстрой очереди и prompt должны идти через один серверный путь. Для prompt используются `T` на клавиатуре и `R3` на геймпаде; touch использует стандартное взаимодействие Roblox.
 
@@ -78,16 +79,16 @@ Workspace
 
 | ID | `DisplayName` / `RoomTitle` | Сторона | Покрытие | Тема blockout |
 | --- | --- | --- | --- | --- |
-| `Arena_1` | `Concrete Cage` | Left | Concrete | грубый бетон и клетка |
-| `Arena_2` | `Neon Futsal` | Right | SmoothPlastic/futsal | цветная футзальная площадка |
-| `Arena_3` | `Club House` | Left | Grass | клубный футбольный двор |
-| `Arena_4` | `Industrial` | Right | Concrete | трубы и индустриальные опоры |
-| `Arena_5` | `Training Lab` | Left | SmoothPlastic/futsal | измерительная тренировочная тема |
-| `Arena_6` | `Championship` | Right | Grass | финальная турнирная сцена |
+| `Arena_1` | `Street Football` | Left | Grass | городской футбольный двор |
+| `Arena_2` | `Community Pitch` | Right | Grass | общественное поле с металлическими балками |
+| `Arena_3` | `Club Ground` | Left | Grass | клубный футбольный двор |
+| `Arena_4` | `Railway End` | Right | Grass | индустриальные опоры без свечения |
+| `Arena_5` | `Training Ground` | Left | Grass | спокойная тренировочная тема |
+| `Arena_6` | `Championship Field` | Right | Grass | финальная турнирная сцена |
 
 Темы оригинальны и выполнены только геометрией, цветом, материалами и встроенным освещением. Декоративные модели можно менять независимо, пока обязательные прямые дети и их смысл сохраняются.
 
-Каждый `Court` имеет `PitchFinish` с чередующимися полосами покрытия и отдельные неколлизионные элементы разметки: `LeftTouchLine`, `RightTouchLine`, `HomeGoalLine`, `AwayGoalLine`, `CenterLine`, `CenterSpot`, сегменты `CenterCircle` и линии штрафных зон. Разметка является визуальной; серверные `Goal`/`Bounds` остаются независимыми невидимыми маркерами.
+Каждый `Court` — зелёный `Grass` с явными одинаковыми `CustomPhysicalProperties` (`Friction = 0.55`, `Elasticity = 0.05`) и имеет `PitchFinish` с чередующимися полосами покоса. Отдельные неколлизионные элементы создают `LeftTouchLine`, `RightTouchLine`, `HomeGoalLine`, `AwayGoalLine`, `CenterLine`, `CenterSpot`, сегменты `CenterCircle` и линии штрафных зон. Разметка является визуальной; серверные `Goal`/`Bounds` остаются независимыми невидимыми маркерами.
 
 ### Обязательные прямые дети комнаты
 
@@ -122,6 +123,7 @@ Workspace
 | `ArenaId` | `string` | `Arena_N` | Уникальный стабильный ID |
 | `RoomIndex` | `number` | `1`…`6` | Порядок комнаты |
 | `DisplayName`, `RoomTitle` | `string` | тема из таблицы выше | Название на табло/UI |
+| `PitchStyle` | `string` | `NaturalGrassFootballV1` | Версия визуального и физического контракта поля |
 | `DistrictSide` | `string` | `Left`/`Right` | Сторона центральной улицы |
 | `ArenaState` | `string` | `Free` | Состояние комнаты |
 | `Busy` | `boolean` | `false` | `true` во всех состояниях кроме `Free` |
@@ -200,7 +202,7 @@ Free → Waiting → Countdown → Active → Result → Free
 
 ## Lighting и производительность
 
-Builder задаёт светлое дневное освещение (`ClockTime = 14.15`) с повышенной читаемостью теней/мяча и помечает собственные эффекты `PannaDistrictBuilderEffect = true`: `PannaAtmosphere`, `PannaColorGrade`, `PannaNeonBloom` и `PannaSunRays`. Bloom и SunRays намеренно умеренные; чужие эффекты в `Lighting` не удаляются.
+Builder задаёт нейтральное дневное освещение (`ClockTime = 13.8`) с читаемыми тенями и помечает собственные эффекты `PannaDistrictBuilderEffect = true`: `PannaAtmosphere`, `PannaColorGrade`, `PannaSoftBloom` и `PannaSunRays`. Bloom снижен до `0.04`, насыщенность — до `0.02`; чужие эффекты в `Lighting` не удаляются. В процедурном мире нет деталей с `Material = Neon`.
 
 Геометрия модульная: повторяющиеся элементы группируются в модели, полосы покрытия и круговая разметка имеют фиксированное число сегментов, а PointLight не отбрасывают динамические тени. Это снижает стоимость blockout, но не заменяет профилирование всех шести комнат, StreamingEnabled, дневных post-effects и LOD на слабом устройстве. Текущий арт/lighting-проход запечён с `PANNA_BAKE_OK` и прошёл структурный Studio smoke вместе с единственным `PannaDistrict`; screenshot-review не выполнен, потому что `StudioCaptureService` недоступен в headless `RunScript`.
 
