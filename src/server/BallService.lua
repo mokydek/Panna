@@ -42,8 +42,7 @@ type FeintState = {
 	lateral: number,
 	startedAt: number,
 	endsAt: number,
-	vulnerableAt: number,
-	vulnerableUntil: number,
+	protectedUntil: number,
 }
 
 type BallState = {
@@ -391,6 +390,7 @@ function BallService.new(config: any, arenas: any): Service
 		arena.Ball.Anchored = false
 		arena.Ball:SetNetworkOwner(nil)
 		arena.Ball:SetAttribute("ControlModel", "PhysicalForce")
+		arena.Ball:SetAttribute("MechanicsVersion", config.Ball.MechanicsVersion)
 		arena.Ball:SetAttribute("OwnerUserId", 0)
 		arena.Ball:SetAttribute("LastTouchUserId", 0)
 		arena.Ball:SetAttribute("BallState", "Reset")
@@ -942,6 +942,29 @@ function BallService._markAction(_self: Service, state: BallState, action: strin
 	ball:SetAttribute("LastActionUserId", if player then player.UserId else 0)
 end
 
+function BallService._brakeBall(
+	self: Service,
+	state: BallState,
+	maximumDeltaSpeed: number,
+	maximumDeltaAngularSpeed: number
+)
+	local ball = state.arena.Ball
+	local velocityDelta =
+		BallMath.ClampMagnitude(-ball.AssemblyLinearVelocity, math.max(0, maximumDeltaSpeed))
+	if BallMath.IsFiniteVector3(velocityDelta) and velocityDelta.Magnitude > 0.01 then
+		ball:ApplyImpulse(velocityDelta * ball.AssemblyMass)
+	end
+	local angularDelta = BallMath.ClampMagnitude(
+		-ball.AssemblyAngularVelocity,
+		math.max(0, maximumDeltaAngularSpeed)
+	)
+	if BallMath.IsFiniteVector3(angularDelta) and angularDelta.Magnitude > 0.01 then
+		local radius = self.config.Ball.Radius
+		local moment = 0.4 * ball.AssemblyMass * radius ^ 2
+		ball:ApplyAngularImpulse(angularDelta * moment)
+	end
+end
+
 function BallService._clearPlayerRuntime(self: Service, player: Player)
 	self:_clearCharge(player)
 	self.dashes[player] = nil
@@ -1118,16 +1141,52 @@ function BallService._stepShields(self: Service, now: number)
 	end
 end
 
+function BallService._activeFeint(
+	self: Service,
+	state: BallState,
+	player: Player,
+	now: number
+): FeintState?
+	local feint = self.feints[player]
+	if not feint then
+		return nil
+	end
+	local root = getRoot(player)
+	local humanoid = getHumanoid(player)
+	if
+		state.owner ~= player
+		or state.mode ~= "Controlled"
+		or not state.active
+		or not state.match
+		or state.match.Ended
+		or player:GetAttribute("ControlsLocked") == true
+		or not root
+		or not humanoid
+		or humanoid.Health <= 0
+		or now > feint.endsAt
+		or (root.Position - state.arena.Ball.Position).Magnitude
+			> self.config.Actions.Feint.ProtectionBreakRadius
+	then
+		self.feints[player] = nil
+		return nil
+	end
+	return feint
+end
+
+function BallService._activeFeintProtection(
+	self: Service,
+	state: BallState,
+	player: Player,
+	now: number
+): FeintState?
+	local feint = self:_activeFeint(state, player, now)
+	return if feint and now <= feint.protectedUntil then feint else nil
+end
+
 function BallService._stepFeints(self: Service, now: number)
-	for player, feint in self.feints do
+	for player in self.feints do
 		local state = self:_stateForPlayer(player)
-		if
-			not state
-			or not state.active
-			or state.owner ~= player
-			or now > feint.endsAt
-			or player:GetAttribute("ControlsLocked") == true
-		then
+		if not state or not self:_activeFeint(state, player, now) then
 			self.feints[player] = nil
 		end
 	end
@@ -1320,11 +1379,50 @@ function BallService._executeKick(
 	if not root or type(settings) ~= "table" then
 		return false
 	end
+	local strikeDirection = direction
+	local aimAssisted = false
+	local match = state.match
+	local targetGoal: BasePart? = nil
+	if match then
+		if match.Home == player then
+			targetGoal = state.arena.AwayGoal
+		elseif match.Away == player then
+			targetGoal = state.arena.HomeGoal
+		end
+	end
+	local aimAssist = shot.AimAssist
+	if targetGoal and targetGoal:IsA("BasePart") and type(aimAssist) == "table" then
+		local target = targetGoal.Position
+			+ targetGoal.CFrame.RightVector
+				* math.clamp(spin, -1, 1)
+				* targetGoal.Size.X
+				* aimAssist.SpinTargetFraction
+		local goalDirection = safeHorizontalDirection(target - state.arena.Ball.Position, direction)
+		if goalDirection then
+			local assisted, used = BallMath.AssistedHorizontalDirection(
+				direction,
+				goalDirection,
+				aimAssist.ConeDot,
+				aimAssist.Strength
+					* settings.AimAssistMultiplier
+					* (0.7 + 0.3 * math.clamp(power, 0, 1))
+			)
+			if assisted then
+				strikeDirection = assisted
+				aimAssisted = used
+			end
+		end
+	end
 	local speed = settings.SpeedMinimum + (settings.SpeedMaximum - settings.SpeedMinimum) * power
 	local lift = settings.LiftMinimum + (settings.LiftMaximum - settings.LiftMinimum) * power
 	local rootVelocity = self:_trustedCarrierVelocity(player, root, os.clock())
-	local velocity =
-		BallMath.LaunchVelocity(direction, speed, lift, rootVelocity, shot.PlayerVelocityCarry)
+	local velocity = BallMath.LaunchVelocity(
+		strikeDirection,
+		speed,
+		lift,
+		rootVelocity,
+		shot.PlayerVelocityCarry
+	)
 	if not velocity then
 		return false
 	end
@@ -1353,6 +1451,8 @@ function BallService._executeKick(
 	)
 	if launched then
 		state.arena.Ball:SetAttribute("LastShotType", shotType)
+		state.arena.Ball:SetAttribute("LastAimAssist", aimAssisted)
+		state.arena.Ball:SetAttribute("LastStrikePower", power)
 		self:_emitAction(player, "Kick", shotType, 0)
 	end
 	return launched
@@ -1373,8 +1473,27 @@ function BallService._executePass(
 	local speed = pass.SpeedMinimum + (pass.SpeedMaximum - pass.SpeedMinimum) * power
 	local lift = pass.LiftMinimum + (pass.LiftMaximum - pass.LiftMinimum) * power
 	local rootVelocity = self:_trustedCarrierVelocity(player, root, os.clock())
+	local passDirection = direction
+	local passAssisted = false
+	local movementDirection = BallMath.PreferredControlDirection(
+		root.CFrame.LookVector,
+		rootVelocity,
+		pass.MovementAssistMinimumSpeed
+	)
+	if movementDirection and rootVelocity.Magnitude >= pass.MovementAssistMinimumSpeed then
+		local assisted, used = BallMath.AssistedHorizontalDirection(
+			direction,
+			movementDirection,
+			pass.MovementAssistConeDot,
+			pass.MovementAssistStrength
+		)
+		if assisted then
+			passDirection = assisted
+			passAssisted = used
+		end
+	end
 	local velocity =
-		BallMath.LaunchVelocity(direction, speed, lift, rootVelocity, pass.PlayerVelocityCarry)
+		BallMath.LaunchVelocity(passDirection, speed, lift, rootVelocity, pass.PlayerVelocityCarry)
 	if not velocity then
 		return false
 	end
@@ -1401,6 +1520,8 @@ function BallService._executePass(
 		pass.StateSeconds
 	)
 	if launched then
+		state.arena.Ball:SetAttribute("LastPassAssist", passAssisted)
+		state.arena.Ball:SetAttribute("LastStrikePower", power)
 		self:_emitAction(player, "Pass", "Ground", 0)
 	end
 	return launched
@@ -1674,6 +1795,7 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		if not ready then
 			return self:_feedback(state, false, false, "Cooldown", action, sequence, cooldown)
 		end
+		self.feints[player] = nil
 		self.shields[player] = {
 			direction = resolvedDirection,
 			startedAt = now,
@@ -1802,37 +1924,50 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 			return self:_feedback(state, false, false, "NoTarget", action, sequence, 0)
 		end
 		local tackle = self.config.Actions.Tackle
-		local feint = self.feints[other]
-		local vulnerable = feint ~= nil
-			and now >= feint.vulnerableAt
-			and now <= feint.vulnerableUntil
-		local radius = tackle.PlayerRadius
-			+ (if vulnerable then tackle.FeintVulnerabilityRadiusBonus else 0)
 		local offset = otherRoot.Position - root.Position
 		local horizontal = Vector3.new(offset.X, 0, offset.Z)
 		local ballOffset = state.arena.Ball.Position - root.Position
 		local ballHorizontal = Vector3.new(ballOffset.X, 0, ballOffset.Z)
 		if
 			horizontal.Magnitude < 0.05
-			or horizontal.Magnitude > radius
+			or horizontal.Magnitude > tackle.PlayerRadius
 			or ballHorizontal.Magnitude > tackle.BallRadius
 			or math.abs(ballOffset.Y) > tackle.MaximumHeight
 		then
 			return self:_feedback(state, false, false, "NoContact", action, sequence, 0)
 		end
+		-- A committed tackle consumes its cooldown even when the angle is poor or
+		-- the carrier blocks it. This makes positioning matter and prevents spam.
+		local ready, cooldown =
+			self:_consumeCooldown(player, action, self.config.Actions.TackleCooldown, now)
+		if not ready then
+			return self:_feedback(state, false, false, "Cooldown", action, sequence, cooldown)
+		end
+		if self:_activeFeintProtection(state, other, now) then
+			self:_emitAction(player, "Tackle", "Blocked", 0)
+			return self:_feedback(
+				state,
+				true,
+				false,
+				"DribbleProtected",
+				action,
+				sequence,
+				cooldown
+			)
+		end
 		local towardDefender = horizontal.Unit
 		local attackerFacing = safeHorizontalDirection(root.CFrame.LookVector, towardDefender)
 		local defenderFacing = safeHorizontalDirection(otherRoot.CFrame.LookVector, -towardDefender)
 		local requiredAttackDot = tackle.AttackerForwardDot
-			- (if vulnerable then tackle.FeintVulnerabilityDotBonus else 0)
 		if
 			not attackerFacing
 			or attackerFacing:Dot(towardDefender) < requiredAttackDot
 			or resolvedDirection:Dot(towardDefender) < requiredAttackDot
 			or not defenderFacing
-			or defenderFacing:Dot(-towardDefender) < tackle.DefenderFrontDot
+			or defenderFacing:Dot(-towardDefender) < tackle.DefenderMinimumDot
 		then
-			return self:_feedback(state, false, false, "BehindDefender", action, sequence, 0)
+			self:_emitAction(player, "Tackle", "Miss", 0)
+			return self:_feedback(state, true, false, "BadTackleAngle", action, sequence, cooldown)
 		end
 		local shield = self:_activeShield(state, other, now)
 		if
@@ -1840,57 +1975,21 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 			and BallMath.DirectionDot(-towardDefender, shield.direction)
 				>= self.config.Actions.Shield.TackleFrontDot
 		then
-			return self:_feedback(state, false, false, "Shielded", action, sequence, 0)
+			self:_emitAction(player, "Tackle", "Blocked", 0)
+			return self:_feedback(state, true, false, "Shielded", action, sequence, cooldown)
 		end
-		local ready, cooldown =
-			self:_consumeCooldown(player, action, self.config.Actions.TackleCooldown, now)
-		if not ready then
-			return self:_feedback(state, false, false, "Cooldown", action, sequence, cooldown)
-		end
-		local contactDirection = safeHorizontalDirection(ballHorizontal, resolvedDirection)
-			or resolvedDirection
-		local launchDirection = (contactDirection * 0.65 + resolvedDirection * 0.35).Unit
-		local velocity = BallMath.LaunchVelocity(
-			launchDirection,
-			tackle.ImpulseSpeed,
-			tackle.Lift,
-			Vector3.zero,
-			0
-		)
-		local angular = if velocity
-			then BallMath.LaunchAngularVelocity(
-				Vector3.new(velocity.X, 0, velocity.Z),
-				Vector3.new(velocity.X, 0, velocity.Z).Magnitude,
-				self.config.Ball.Radius,
-				tackle.RollRatio,
-				0
-			)
-			else nil
-		local launched = false
-		if velocity and angular then
-			launched = self:_launch(
-				state,
-				player,
-				"Tackle",
-				velocity,
-				angular,
-				other,
-				tackle.ReleaseSeconds,
-				tackle.ReleaseSeconds
-			)
-		end
-		if launched then
-			self:_emitAction(player, "Tackle", "Standing", 0)
-		end
-		return self:_feedback(
-			state,
-			launched,
-			launched,
-			if launched then "Executed" else "InvalidPhysicsState",
-			action,
-			sequence,
-			cooldown
-		)
+		self:_clearShield(player)
+		state.recapturePlayer = other
+		state.recaptureUntil = now + tackle.TakeoverGraceSeconds
+		self:_setBallMode(state, "Controlled", player, "Tackle")
+		state.controlDampingPending = false
+		state.controlGraceUntil = now + tackle.TakeoverGraceSeconds
+		state.lastTouch = player
+		state.arena.Ball:SetAttribute("LastTouchUserId", player.UserId)
+		state.arena.Ball:SetAttribute("LastActionUserId", player.UserId)
+		self:_brakeBall(state, tackle.MaximumStopDeltaSpeed, tackle.MaximumStopAngularSpeed)
+		self:_emitAction(player, "Tackle", "Standing", 0)
+		return self:_feedback(state, true, true, "Executed", action, sequence, cooldown)
 	end
 
 	if action == "Feint" then
@@ -1918,15 +2017,22 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 			return self:_feedback(state, false, false, "Cooldown", action, sequence, cooldown)
 		end
 		self:_clearShield(player)
+		local duration = math.max(0.1, variantConfig.Duration)
 		self.feints[player] = {
 			variant = variant :: string,
 			direction = resolvedDirection,
 			lateral = math.clamp(lateral, -1, 1),
 			startedAt = now,
-			endsAt = now + variantConfig.Duration,
-			vulnerableAt = now + self.config.Actions.Feint.VulnerabilityStart,
-			vulnerableUntil = now + self.config.Actions.Feint.VulnerabilityEnd,
+			endsAt = now + duration,
+			protectedUntil = now + duration,
 		}
+		state.controlDampingPending = false
+		state.controlGraceUntil = math.max(state.controlGraceUntil, now + duration)
+		self:_brakeBall(
+			state,
+			self.config.Actions.Feint.MaximumStopDeltaSpeed,
+			self.config.Actions.Feint.MaximumStopAngularSpeed
+		)
 		self:_markAction(state, "Feint", player)
 		state.arena.Ball:SetAttribute("LastFeintVariant", variant)
 		self:_emitAction(player, "Feint", variant :: string, math.clamp(lateral, -1, 1))
@@ -1951,6 +2057,8 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		end
 		local throughDirection = horizontal.Unit
 		local rootFacing = safeHorizontalDirection(root.CFrame.LookVector, throughDirection)
+		local defenderFacing =
+			safeHorizontalDirection(otherRoot.CFrame.LookVector, -throughDirection)
 		local closest = BallMath.ClosestPointOnRay(
 			state.arena.Ball.Position,
 			resolvedDirection,
@@ -1965,6 +2073,8 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 			resolvedDirection:Dot(throughDirection) < panna.AimDot
 			or not rootFacing
 			or rootFacing:Dot(throughDirection) < panna.AttackerFacingDot
+			or not defenderFacing
+			or defenderFacing:Dot(-throughDirection) < panna.DefenderFacingDot
 			or corridorOffset > panna.CorridorRadius
 		then
 			return self:_feedback(state, false, false, "AimRejected", action, sequence, 0)
@@ -1977,8 +2087,18 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 		if not self.pannaDetector:Begin(player, other, state.arena.Ball) then
 			return self:_feedback(state, false, false, "PannaUnavailable", action, sequence, 0)
 		end
+		local pannaDirection = resolvedDirection
+		local assisted, pannaAssisted = BallMath.AssistedHorizontalDirection(
+			resolvedDirection,
+			throughDirection,
+			panna.AimDot,
+			panna.AimAssistStrength
+		)
+		if assisted then
+			pannaDirection = assisted
+		end
 		local velocity =
-			BallMath.LaunchVelocity(resolvedDirection, panna.Speed, panna.Lift, Vector3.zero, 0)
+			BallMath.LaunchVelocity(pannaDirection, panna.Speed, panna.Lift, Vector3.zero, 0)
 		local angular = if velocity
 			then BallMath.LaunchAngularVelocity(
 				Vector3.new(velocity.X, 0, velocity.Z),
@@ -2002,6 +2122,7 @@ function BallService.HandleAction(self: Service, player: Player, payload: any): 
 			)
 		end
 		if launched then
+			state.arena.Ball:SetAttribute("LastPannaAssist", pannaAssisted)
 			self:_emitAction(player, "Skill", "Panna", 0)
 		end
 		return self:_feedback(
@@ -2140,6 +2261,15 @@ function BallService._updatePossession(self: Service, state: BallState, now: num
 			state.buffered[player] = nil
 		end
 	end
+	if
+		state.owner
+		and state.mode == "Controlled"
+		and self:_activeFeintProtection(state, state.owner, now)
+	then
+		-- The active variant feint owns this short interaction window. Passive
+		-- capture and tackle cannot swap ownership until its protection expires.
+		return
+	end
 
 	local first = state.match.Home
 	local second = state.match.Away
@@ -2260,15 +2390,30 @@ function BallService._dampCapturedBall(self: Service, state: BallState, carrierV
 	local ball = state.arena.Ball
 	local dribble = self.config.Ball.Dribble
 	local velocity = ball.AssemblyLinearVelocity
-	local delta = Vector3.new(
-		(carrierVelocity.X * dribble.VelocityCarry - velocity.X) * dribble.CaptureHorizontalDamping,
-		-velocity.Y * dribble.CaptureVerticalDamping,
-		(carrierVelocity.Z * dribble.VelocityCarry - velocity.Z) * dribble.CaptureHorizontalDamping
+	local firstTouch = self.config.Ball.FirstTouch
+	local trapped = ball:GetAttribute("LastAction") == "Trap"
+	local horizontalRetention = firstTouch.RedirectHorizontalRetention
+	local verticalRetention = firstTouch.RedirectVerticalRetention
+	if trapped then
+		horizontalRetention = firstTouch.TrapHorizontalRetention
+		verticalRetention = firstTouch.TrapVerticalRetention
+	end
+	local targetVelocity = BallMath.CushionedTouchVelocity(
+		velocity,
+		carrierVelocity * dribble.VelocityCarry,
+		state.controlDirection or carrierVelocity,
+		horizontalRetention,
+		verticalRetention,
+		firstTouch.MaximumExitSpeed
 	)
-	delta = BallMath.ClampMagnitude(delta, dribble.MaximumCaptureDeltaSpeed)
+	if not targetVelocity then
+		return
+	end
+	local delta = targetVelocity - velocity
 	if BallMath.IsFiniteVector3(delta) and delta.Magnitude > 0.01 then
 		ball:ApplyImpulse(delta * ball.AssemblyMass)
 	end
+	ball:SetAttribute("LastTouchControl", if trapped then "Trap" else "Cushion")
 end
 
 function BallService._updateRollAssist(self: Service, state: BallState, groundNormal: Vector3)
@@ -2305,6 +2450,7 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 
 	local dribble = self.config.Ball.Dribble
 	local shield = self:_activeShield(state, owner, now)
+	local feint = self:_activeFeint(state, owner, now)
 	local facing = safeHorizontalDirection(root.CFrame.LookVector, root.CFrame.LookVector)
 	if not facing then
 		self:_loseControl(state, owner, now, "ControlDirectionLost")
@@ -2320,7 +2466,7 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 		self:_loseControl(state, owner, now, "ControlDirectionLost")
 		return
 	end
-	local baseControlDirection = if self.feints[owner] == nil then travelDirection else facing
+	local baseControlDirection = if feint then facing else travelDirection
 	local feintDirection, lateralOffset, feintDistanceMultiplier, feintAccelerationMultiplier =
 		self:_feintTarget(owner, baseControlDirection, now)
 	local controlDirection = BallMath.RotateHorizontalTowards(
@@ -2334,14 +2480,20 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 	end
 	state.controlDirection = controlDirection
 	local rootSpeed = carrierVelocity.Magnitude
-	local sprinting = rootSpeed >= dribble.SprintSpeed
-	local baseDistance = if shield
-		then dribble.ShieldDistance
-		else if sprinting
-			then dribble.SprintDistance
-			else if rootSpeed >= dribble.WalkSpeedThreshold
-				then dribble.WalkDistance
-				else dribble.IdleDistance
+	local sprinting = not feint and rootSpeed >= dribble.SprintSpeed
+	local smoothDistance = BallMath.SmoothControlDistance(
+		rootSpeed,
+		dribble.IdleDistance,
+		dribble.WalkDistance,
+		dribble.SprintDistance,
+		dribble.WalkSpeedThreshold,
+		dribble.SprintSpeed
+	)
+	if not smoothDistance then
+		self:_loseControl(state, owner, now, "ControlDistanceInvalid")
+		return
+	end
+	local baseDistance = if shield then dribble.ShieldDistance else smoothDistance
 	local flatTarget = BallMath.PhysicalControlTarget(
 		root.CFrame,
 		controlDirection,
@@ -2364,12 +2516,13 @@ function BallService._dribble(self: Service, state: BallState, deltaTime: number
 		self:_loseControl(state, owner, now, "ControlGroundLost")
 		return
 	end
+	local targetHeight = ground.Position.Y + self.config.Ball.Radius + dribble.HeightOffset
 	local target = BallMath.PhysicalControlTarget(
 		root.CFrame,
 		controlDirection,
 		baseDistance * feintDistanceMultiplier,
 		lateralOffset,
-		ground.Position.Y + self.config.Ball.Radius + dribble.HeightOffset
+		targetHeight
 	)
 	if not target then
 		self:_loseControl(state, owner, now, "ControlTargetLost")

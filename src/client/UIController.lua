@@ -14,17 +14,17 @@ local ACTION_PRESENTATION = ControlCatalog.Actions
 local ABILITY_GUIDE = ControlCatalog.GuideEntries
 
 local COLORS = table.freeze({
-	Background = Color3.fromRGB(8, 12, 19),
-	Panel = Color3.fromRGB(17, 24, 34),
-	PanelLight = Color3.fromRGB(28, 38, 52),
-	Text = Color3.fromRGB(244, 248, 255),
-	Muted = Color3.fromRGB(146, 161, 181),
-	Cyan = Color3.fromRGB(36, 226, 255),
-	Pink = Color3.fromRGB(255, 61, 181),
-	Lime = Color3.fromRGB(157, 255, 71),
-	Active = Color3.fromRGB(22, 112, 126),
-	Warning = Color3.fromRGB(255, 188, 52),
-	Danger = Color3.fromRGB(255, 76, 92),
+	Background = Color3.fromRGB(18, 22, 30),
+	Panel = Color3.fromRGB(29, 35, 46),
+	PanelLight = Color3.fromRGB(45, 53, 68),
+	Text = Color3.fromRGB(250, 252, 255),
+	Muted = Color3.fromRGB(171, 184, 201),
+	Cyan = Color3.fromRGB(0, 214, 242),
+	Pink = Color3.fromRGB(255, 61, 129),
+	Lime = Color3.fromRGB(91, 230, 126),
+	Active = Color3.fromRGB(34, 151, 165),
+	Warning = Color3.fromRGB(255, 221, 57),
+	Danger = Color3.fromRGB(255, 77, 90),
 })
 
 local function addCorner(parent: GuiObject, radius: number): UICorner
@@ -599,14 +599,6 @@ function UIController.new(): UIController
 	powerFill.Parent = powerTrack
 	addCorner(powerFill, 8)
 
-	local powerGradient = Instance.new("UIGradient")
-	powerGradient.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.Cyan),
-		ColorSequenceKeypoint.new(0.72, COLORS.Lime),
-		ColorSequenceKeypoint.new(1, COLORS.Pink),
-	})
-	powerGradient.Parent = powerFill
-
 	local powerCaption =
 		makeLabel(powerTrack, "Caption", "SHOT POWER", Enum.Font.GothamBlack, 9, COLORS.Text)
 	powerCaption.Position = UDim2.fromOffset(8, 0)
@@ -800,14 +792,6 @@ function UIController.new(): UIController
 	guideAccent.Size = UDim2.new(1, 0, 0, 5)
 	guideAccent.ZIndex = 72
 	guideAccent.Parent = controlsGuide
-	local guideGradient = Instance.new("UIGradient")
-	guideGradient.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.Cyan),
-		ColorSequenceKeypoint.new(0.5, COLORS.Lime),
-		ColorSequenceKeypoint.new(1, COLORS.Pink),
-	})
-	guideGradient.Parent = guideAccent
-
 	local guideTitle = makeLabel(
 		controlsGuide,
 		"Title",
@@ -1791,6 +1775,12 @@ function UIController.ApplyActionFeedback(self: UIController, feedback: any)
 				if message then
 					self:_showActionFeedback(message, COLORS.Lime)
 				end
+			elseif reason == "DribbleProtected" then
+				self:_showActionFeedback("DRIBBLE PROTECTED", COLORS.Warning)
+			elseif reason == "Shielded" then
+				self:_showActionFeedback("TACKLE BLOCKED", COLORS.Warning)
+			elseif reason == "BadTackleAngle" then
+				self:_showActionFeedback("TACKLE MISSED", COLORS.Danger)
 			end
 			return
 		end
@@ -1808,7 +1798,11 @@ function UIController.ApplyActionFeedback(self: UIController, feedback: any)
 			self:PlayImpact("Pass", 0.4)
 		elseif action == "Tackle" then
 			self:PlayImpact("Tackle", 0.55)
-		elseif action == "Feint" or action == "Skill" then
+			self:_showActionFeedback("BALL WON", COLORS.Lime)
+		elseif action == "Feint" then
+			self:PlayImpact("Skill", 0.35)
+			self:_showActionFeedback("CLOSE CONTROL", COLORS.Cyan)
+		elseif action == "Skill" then
 			self:PlayImpact("Skill", 0.35)
 		elseif action == "Trap" then
 			self:_showActionFeedback("FIRST TOUCH READY", COLORS.Lime)
@@ -1837,6 +1831,7 @@ function UIController.ApplyActionFeedback(self: UIController, feedback: any)
 		NoTarget = "NO OPPONENT IN RANGE",
 		BehindDefender = "ATTACK FROM THE FRONT",
 		Shielded = "OPPONENT IS SHIELDING",
+		DribbleProtected = "DRIBBLE IS PROTECTED",
 		AimRejected = "FACE YOUR TARGET",
 		MatchMismatch = "MATCH CHANGED - TRY AGAIN",
 		ArenaMismatch = "ARENA CHANGED - TRY AGAIN",

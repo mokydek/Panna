@@ -415,6 +415,7 @@ $requiredPaths = @(
     'src/client/ControlCatalog.lua',
     'src/client/ProceduralPoseCatalog.lua',
     'src/client/PlayerAnimationController.lua',
+	'src/client/FootballVFXController.lua',
     'src/client/UIController.lua',
     'src/client/InputController.lua',
     'src/world/PannaDistrict.model.json',
@@ -459,14 +460,14 @@ foreach ($projectManifestFile in $projectManifestFiles) {
     $relative = (Get-RelativeProjectPath -FullName $projectManifestFile.FullName).Replace('\', '/')
     if ($allowedProjectPaths -notcontains $relative) {
         $unexpectedProjectPaths += $relative
-        Add-Failure "Unexpected Rojo project manifest: $relative. Panna keeps exactly four allowed internal build/test profiles; default.project.json is the canonical release project."
+        Add-Failure "Unexpected Rojo project manifest: $relative. Panna keeps exactly four allowed release/build/test profiles; default.project.json is the canonical release project."
     }
 }
 if ($projectManifestFiles.Count -ne $allowedProjectPaths.Count) {
     Add-Failure "Expected exactly $($allowedProjectPaths.Count) Rojo project manifests outside build, found $($projectManifestFiles.Count)."
 }
 elseif ($unexpectedProjectPaths.Count -eq 0) {
-    Add-Pass 'Exactly four allowed internal Rojo profiles exist outside build; default.project.json is the canonical release project.'
+    Add-Pass 'Exactly four allowed Rojo profiles exist outside build; default.project.json is the canonical release project.'
 }
 
 foreach ($projectSpecification in $projectSpecifications) {
@@ -580,7 +581,13 @@ if (Test-Path -LiteralPath $ballServicePath -PathType Leaf) {
         @{ Name = 'manual server ownership'; Source = $ballServiceMask; Regex = ':\s*SetNetworkOwner\s*\(\s*nil\s*\)' },
         @{ Name = 'shared launch velocity'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*LaunchVelocity\s*\(' },
         @{ Name = 'shared launch angular velocity'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*LaunchAngularVelocity\s*\(' },
-        @{ Name = 'shared aerodynamic drag'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*AerodynamicDragAcceleration\s*\(' }
+        @{ Name = 'shared aerodynamic drag'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*AerodynamicDragAcceleration\s*\(' },
+        @{ Name = 'smooth dribble distance'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*SmoothControlDistance\s*\(' },
+        @{ Name = 'cushioned first touch'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*CushionedTouchVelocity\s*\(' },
+        @{ Name = 'bounded aim assistance'; Source = $ballServiceMask; Regex = '\bBallMath\s*\.\s*AssistedHorizontalDirection\s*\(' },
+        @{ Name = 'variant feint trajectory'; Source = $ballServiceMask; Regex = '\b_feintTarget\s*\(' },
+        @{ Name = 'protected dribble feedback'; Source = $ballServiceSource; Regex = 'DribbleProtected' },
+        @{ Name = 'direct tackle takeover'; Source = $ballServiceSource; Regex = '(?s)_setBallMode\s*\(\s*state\s*,\s*["'']Controlled["'']\s*,\s*player\s*,\s*["'']Tackle["'']\s*\)' }
     )
     foreach ($requiredPrimitive in $requiredPhysicalPatterns) {
         if (([string] $requiredPrimitive.Source) -notmatch ([string] $requiredPrimitive.Regex)) {
@@ -606,6 +613,12 @@ if (Test-Path -LiteralPath $ballServicePath -PathType Leaf) {
     if ($flightContractFailures -eq 0) {
         Add-Pass 'BallService gates its subtle trail to airborne action states and exits grounded Shot directly.'
     }
+    if ($ballServiceMask -match '(?s)local\s+delta\s*=\s*targetVelocity\s*-\s*velocity\s+delta\s*=\s*BallMath\s*\.\s*ClampMagnitude') {
+        Add-Failure 'First-touch damping can leave the ball above MaximumExitSpeed because its correction delta is clamped.'
+    }
+    else {
+        Add-Pass 'First-touch damping applies the finite capped target velocity without weakening MaximumExitSpeed.'
+    }
 }
 
 $ballMathPath = Join-Path $root 'src/shared/BallMath.lua'
@@ -618,13 +631,38 @@ if ((Test-Path -LiteralPath $ballMathPath -PathType Leaf) -and
     $configSource = Get-Content -LiteralPath $configPath -Raw
     $worldBuilderSource = Get-Content -LiteralPath $worldBuilderPath -Raw
     $footballVisualFailures = 0
-    foreach ($helperName in @('LaunchVelocity', 'LaunchAngularVelocity', 'AerodynamicDragAcceleration')) {
+    foreach ($helperName in @(
+        'LaunchVelocity',
+        'LaunchAngularVelocity',
+        'AerodynamicDragAcceleration',
+        'SmoothControlDistance',
+        'AssistedHorizontalDirection',
+        'CushionedTouchVelocity'
+    )) {
         if ($ballMathSource -notmatch ('function\s+BallMath\.' + [regex]::Escape($helperName) + '\s*\(')) {
             Add-Failure "BallMath is missing the production helper $helperName."
             $footballVisualFailures += 1
         }
     }
-    foreach ($configToken in @('VisualVersion', 'Aerodynamics', 'DragCoefficient', 'MaximumDragAcceleration', 'MaximumStepSeconds', 'RollRatio', 'ChargeMaximumSeconds')) {
+    foreach ($configToken in @(
+        'VisualVersion',
+        'MechanicsVersion',
+        'Aerodynamics',
+        'DragCoefficient',
+        'MaximumDragAcceleration',
+        'MaximumStepSeconds',
+        'RollRatio',
+        'ChargeMaximumSeconds',
+        'AimAssist',
+        'MovementAssistStrength',
+        'TrapHorizontalRetention',
+        'DefenderMinimumDot',
+        'TakeoverGraceSeconds',
+        'ProtectionBreakRadius',
+		'DistanceMultiplier',
+		'LateralDistance',
+		'ControlAccelerationMultiplier'
+    )) {
         if ($configSource -notmatch ('\b' + [regex]::Escape($configToken) + '\b')) {
             Add-Failure "Config is missing football flight/visual tuning '$configToken'."
             $footballVisualFailures += 1
@@ -633,6 +671,12 @@ if ((Test-Path -LiteralPath $ballMathPath -PathType Leaf) -and
     foreach ($legacySpinToken in @('RollSpin', 'AngularVelocityScale')) {
         if ($configSource -match ('\b' + [regex]::Escape($legacySpinToken) + '\b')) {
             Add-Failure "Config still contains legacy arbitrary spin tuning '$legacySpinToken'."
+            $footballVisualFailures += 1
+        }
+    }
+    foreach ($legacyDribbleToken in @('VulnerabilityStart', 'VulnerabilityEnd', 'FeintVulnerabilityRadiusBonus', 'FeintVulnerabilityDotBonus')) {
+        if ($configSource -match ('\b' + [regex]::Escape($legacyDribbleToken) + '\b')) {
+            Add-Failure "Config still contains obsolete vulnerable-dribble tuning '$legacyDribbleToken'."
             $footballVisualFailures += 1
         }
     }
@@ -649,7 +693,7 @@ if ((Test-Path -LiteralPath $ballMathPath -PathType Leaf) -and
         $footballVisualFailures += 1
     }
     if ($footballVisualFailures -eq 0) {
-        Add-Pass 'Shared football launch/drag math and the versioned six-panel ball visual contract are present.'
+        Add-Pass 'Shared football control/assist/launch math and the versioned six-panel ball visual contract are present.'
     }
 }
 
@@ -751,8 +795,19 @@ if ((Test-Path -LiteralPath $inputControllerPath -PathType Leaf) -and (Test-Path
         Add-Failure 'InputController does not consume the shared ControlCatalog input lists.'
         $invalidBindingCount += 1
     }
+    foreach ($primaryTakeoverToken in @(
+        '_primaryMouseUsesTackle',
+        'ballState == "Controlled"',
+        'self:_onInstantAction("Tackle", inputState)',
+        'self:_onPrimaryAction(inputState, input)'
+    )) {
+        if ($inputControllerSource -notmatch [regex]::Escape($primaryTakeoverToken)) {
+            Add-Failure "InputController contextual LMB takeover is missing '$primaryTakeoverToken'."
+            $invalidBindingCount += 1
+        }
+    }
     if ($invalidBindingCount -eq 0) {
-        Add-Pass 'Shared control catalog binds all actions for mouse/keyboard, gamepad, and touch UI.'
+        Add-Pass 'Shared control catalog binds all actions and routes opponent-owned LMB to direct takeover.'
     }
 }
 
@@ -875,6 +930,71 @@ if ((Test-Path -LiteralPath $poseCatalogPath -PathType Leaf) -and
 
     if ($animationFailures -eq 0) {
         Add-Pass 'Asset-free player poses cover every mechanic with scoped cue filtering, additive joints, and full client lifecycle cleanup.'
+    }
+}
+
+$footballVFXPath = Join-Path $root 'src/client/FootballVFXController.lua'
+if ((Test-Path -LiteralPath $footballVFXPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $inputControllerPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $clientInitPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+    $footballVFXSource = Get-Content -LiteralPath $footballVFXPath -Raw
+    $inputControllerSource = Get-Content -LiteralPath $inputControllerPath -Raw
+    $clientInitSource = Get-Content -LiteralPath $clientInitPath -Raw
+    $configSource = Get-Content -LiteralPath $configPath -Raw
+    $vfxFailures = 0
+
+    foreach ($vfxToken in @('Beam', 'TrajectoryDot', 'BallDirection', 'Highlight', 'MaximumTransientParts', 'LocalOnlyVFX', 'TweenService', 'lastVisualRevision', 'visualRevision', 'serverTime', 'MAX_EFFECT_AGE')) {
+        if ($footballVFXSource -notmatch [regex]::Escape($vfxToken)) {
+            Add-Failure "FootballVFXController runtime contract is missing '$vfxToken'."
+            $vfxFailures += 1
+        }
+    }
+    foreach ($vfxMethod in @('new', 'SetAimState', 'ApplyEffect', 'ResetTransientState', 'Destroy', 'GetPalette')) {
+        if ($footballVFXSource -notmatch ('function\s+FootballVFXController\.' + [regex]::Escape($vfxMethod) + '\s*\(')) {
+            Add-Failure "FootballVFXController.$vfxMethod is missing."
+            $vfxFailures += 1
+        }
+    }
+    foreach ($cosmeticToken in @('CanCollide = false', 'CanTouch = false', 'CanQuery = false')) {
+        if ($footballVFXSource -notmatch [regex]::Escape($cosmeticToken)) {
+            Add-Failure "FootballVFXController does not explicitly enforce '$cosmeticToken'."
+            $vfxFailures += 1
+        }
+    }
+    if ($footballVFXSource -match 'rbxassetid://') {
+        Add-Failure 'FootballVFXController unexpectedly depends on an external Roblox asset id.'
+        $vfxFailures += 1
+    }
+    if ($footballVFXSource -notmatch 'if\s+not\s+validBall\s+and\s+not\s+root\s+then' -or
+        $footballVFXSource -notmatch 'table\s*\.\s*clear\s*\(\s*self\s*\.\s*lastVisualRevision\s*\)') {
+        Add-Failure 'FootballVFXController does not reject origin-less effects or clear its visual revision cache.'
+        $vfxFailures += 1
+    }
+    foreach ($configToken in @('VisualEffects', 'StreetReadabilityV1', 'AimGuide', 'BallDirection', 'Impact')) {
+        if ($configSource -notmatch [regex]::Escape($configToken)) {
+            Add-Failure "Config is missing football VFX tuning '$configToken'."
+            $vfxFailures += 1
+        }
+    }
+    foreach ($inputToken in @('SetAimState', '_directionForAction(previewAction)', 'previewPower', 'self._chargingAction ~= nil')) {
+        if ($inputControllerSource -notmatch [regex]::Escape($inputToken)) {
+            Add-Failure "InputController direction-preview integration is missing '$inputToken'."
+            $vfxFailures += 1
+        }
+    }
+    foreach ($initToken in @('FootballVFXController.new(LOCAL_PLAYER)', 'footballVFX:ApplyEffect(payload)', 'footballVFX:ResetTransientState()', 'footballVFX:Destroy()', 'InputController.new(actionRequest, ui, footballVFX)')) {
+        if ($clientInitSource -notmatch [regex]::Escape($initToken)) {
+            Add-Failure "Client VFX lifecycle integration is missing '$initToken'."
+            $vfxFailures += 1
+        }
+    }
+    if ($clientInitSource -notmatch '(?s)footballVFX:ApplyEffect\s*\(\s*payload\s*\).*?playerAnimations:ApplyEffect\s*\(\s*payload\s*\)') {
+        Add-Failure 'Client does not route scoped effects through VFX before the animation/UI fallback.'
+        $vfxFailures += 1
+    }
+    if ($vfxFailures -eq 0) {
+        Add-Pass 'Asset-free local VFX provide submitted aim, charged trajectory, replicated ball direction, action impacts, and bounded cleanup.'
     }
 }
 

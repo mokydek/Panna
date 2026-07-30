@@ -33,6 +33,7 @@ local clientModules = {}
 for _, moduleName in
 	{
 		"ControlCatalog",
+		"FootballVFXController",
 		"InputController",
 		"PlayerAnimationController",
 		"ProceduralPoseCatalog",
@@ -48,9 +49,97 @@ do
 end
 
 local controlCatalog = clientModules.ControlCatalog
+local footballVFXControllerModule = clientModules.FootballVFXController
 local playerAnimationControllerModule = clientModules.PlayerAnimationController
 local proceduralPoseCatalog = clientModules.ProceduralPoseCatalog
 local uiControllerModule = clientModules.UIController
+for _, methodName in
+	{
+		"new",
+		"SetAimState",
+		"ApplyEffect",
+		"ResetTransientState",
+		"Destroy",
+		"GetPalette",
+	}
+do
+	expect(
+		type(footballVFXControllerModule[methodName]) == "function",
+		"FootballVFXController." .. methodName .. " missing"
+	)
+end
+local vfxPalette = footballVFXControllerModule.GetPalette()
+expect(
+	type(vfxPalette) == "table"
+		and typeof(vfxPalette.Cyan) == "Color3"
+		and typeof(vfxPalette.Pink) == "Color3",
+	"football VFX palette is incomplete"
+)
+local vfxTestUserId = 900001
+local vfxController = footballVFXControllerModule.new({
+	UserId = vfxTestUserId,
+	Character = nil,
+} :: any)
+local vfxNow = Workspace:GetServerTimeNow()
+local noOriginCue = {
+	kind = "PlayerAction",
+	actorUserId = vfxTestUserId,
+	action = "Kick",
+	mode = "Normal",
+	visualRevision = 1,
+	serverTime = vfxNow,
+}
+expect(not vfxController:ApplyEffect(noOriginCue), "origin-less VFX cue created a world effect")
+expect(#vfxController.transients == 0, "origin-less VFX cue left transient parts")
+expect(
+	vfxController:ApplyEffect(noOriginCue) and #vfxController.transients == 0,
+	"duplicate origin-less VFX cue was not consumed safely"
+)
+local vfxBall = Instance.new("Part")
+vfxBall.Name = "VFXSmokeBall"
+vfxBall.Shape = Enum.PartType.Ball
+vfxBall.Size = Vector3.new(2.3, 2.3, 2.3)
+vfxBall.Anchored = true
+vfxBall.Position = Vector3.new(0, 8, 0)
+vfxBall.Parent = Workspace
+vfxController:SetAimState(
+	vfxBall,
+	"Controlled",
+	vfxTestUserId,
+	Vector3.new(0, 0, -1),
+	"Kick",
+	"Normal",
+	0.6,
+	true,
+	true
+)
+local validCue = table.clone(noOriginCue)
+validCue.visualRevision = 2
+expect(vfxController:ApplyEffect(validCue), "valid football VFX cue was rejected")
+local transientCount = #vfxController.transients
+expect(transientCount > 0, "valid football VFX cue created no transient parts")
+expect(vfxController:ApplyEffect(validCue), "duplicate football VFX cue was not consumed")
+expect(#vfxController.transients == transientCount, "duplicate football VFX cue replayed")
+local staleCue = table.clone(validCue)
+staleCue.visualRevision = 3
+staleCue.serverTime = vfxNow - 100
+expect(vfxController:ApplyEffect(staleCue), "stale football VFX cue was not consumed")
+expect(
+	#vfxController.transients == transientCount
+		and vfxController.lastVisualRevision[vfxTestUserId] == 2,
+	"stale football VFX cue changed the presentation state"
+)
+vfxController:ResetTransientState()
+expect(
+	#vfxController.transients == 0 and next(vfxController.lastVisualRevision) == nil,
+	"football VFX reset did not clear transient parts and revisions"
+)
+vfxController:Destroy()
+vfxBall:Destroy()
+expect(
+	Workspace:FindFirstChild("PannaLocalVFX_" .. tostring(vfxTestUserId)) == nil,
+	"football VFX folder leaked"
+)
 expect(#controlCatalog.ActionOrder == 7, "control catalog must expose seven HUD actions")
 expect(#controlCatalog.TouchOrder == 8, "touch catalog must include ShotMode")
 local guideEntries = uiControllerModule.GetAbilityGuide()
@@ -114,6 +203,14 @@ for action, inputs in expectedInputs do
 		expect(table.find(definition.inputs, expectedInput) ~= nil, action .. " input is missing")
 	end
 end
+expect(
+	string.find(controlCatalog.Actions.Kick.keyboard, "STEAL", 1, true) ~= nil,
+	"primary mouse binding does not advertise contextual takeover"
+)
+expect(
+	string.find(controlCatalog.Actions.Tackle.keyboard, "LMB", 1, true) ~= nil,
+	"tackle guide does not expose contextual LMB takeover"
+)
 
 local expectedPoseActions = {
 	Charge = true,
@@ -434,6 +531,9 @@ for _, functionName in
 		"ClosestPointOnRay",
 		"ProjectOnPlane",
 		"RotateHorizontalTowards",
+		"SmoothControlDistance",
+		"AssistedHorizontalDirection",
+		"CushionedTouchVelocity",
 		"PhysicalControlTarget",
 		"PhysicalControlAcceleration",
 		"MagnusAcceleration",
@@ -561,6 +661,66 @@ expect(
 		and (idleControlDirection :: Vector3):Dot(Vector3.new(0, 0, -1)) > 0.999,
 	"physical control direction did not fall back to character facing"
 )
+local idleDistance = ballMath.SmoothControlDistance(0, 2.1, 2.5, 3.4, 2, 20)
+local walkingDistance = ballMath.SmoothControlDistance(2, 2.1, 2.5, 3.4, 2, 20)
+local runningDistance = ballMath.SmoothControlDistance(11, 2.1, 2.5, 3.4, 2, 20)
+local sprintDistance = ballMath.SmoothControlDistance(20, 2.1, 2.5, 3.4, 2, 20)
+expect(
+	idleDistance ~= nil
+		and math.abs((idleDistance :: number) - 2.1) < 1e-4
+		and walkingDistance ~= nil
+		and math.abs((walkingDistance :: number) - 2.5) < 1e-4
+		and runningDistance ~= nil
+		and runningDistance > 2.5
+		and runningDistance < 3.4
+		and sprintDistance ~= nil
+		and math.abs((sprintDistance :: number) - 3.4) < 1e-4,
+	"smooth dribble distance does not interpolate across player speed"
+)
+local assistedDirection, assistUsed =
+	ballMath.AssistedHorizontalDirection(Vector3.new(0, 0, -1), Vector3.new(1, 0, -1), 0.7, 0.25)
+expect(
+	assistUsed
+		and assistedDirection ~= nil
+		and (assistedDirection :: Vector3):Dot(Vector3.new(1, 0, -1).Unit)
+			> Vector3.new(0, 0, -1):Dot(Vector3.new(1, 0, -1).Unit),
+	"bounded shot assistance did not move an already plausible aim toward its target"
+)
+local rejectedAssist, rejectedAssistUsed =
+	ballMath.AssistedHorizontalDirection(Vector3.new(0, 0, -1), Vector3.new(0, 0, 1), 0.7, 0.25)
+expect(
+	not rejectedAssistUsed
+		and rejectedAssist ~= nil
+		and (rejectedAssist :: Vector3):Dot(Vector3.new(0, 0, -1)) > 0.999,
+	"aim assistance redirected an implausible backwards shot"
+)
+local cushionedVelocity = ballMath.CushionedTouchVelocity(
+	Vector3.new(0, 10, -30),
+	Vector3.new(8, 0, 0),
+	Vector3.new(0, 0, -1),
+	0.1,
+	0.05,
+	32
+)
+expect(
+	cushionedVelocity ~= nil
+		and ((cushionedVelocity :: Vector3) - Vector3.new(8, 0.5, -3)).Magnitude < 1e-4,
+	"first-touch cushion did not absorb incoming horizontal and vertical speed"
+)
+local cappedTrapVelocity = ballMath.CushionedTouchVelocity(
+	Vector3.new(0, 18, -84),
+	Vector3.zero,
+	Vector3.new(0, 0, -1),
+	config.Ball.FirstTouch.TrapHorizontalRetention,
+	config.Ball.FirstTouch.TrapVerticalRetention,
+	config.Ball.FirstTouch.MaximumExitSpeed
+)
+expect(
+	cappedTrapVelocity ~= nil
+		and (cappedTrapVelocity :: Vector3).Magnitude
+			<= config.Ball.FirstTouch.MaximumExitSpeed + 1e-4,
+	"explicit trap can exceed the configured maximum exit speed"
+)
 local projected = ballMath.ProjectOnPlane(Vector3.new(3, 5, 4), Vector3.yAxis)
 expect(projected == Vector3.new(3, 0, 4), "ground-plane projection is incorrect")
 expect(
@@ -645,16 +805,38 @@ expect(
 expect(config.Ball.Dribble.NaturalFrequency > 0, "physical PD frequency is disabled")
 expect(config.Ball.Dribble.MaximumAccelerationWalk > 0, "physical drive force is disabled")
 expect(config.Ball.Dribble.RollResponsiveness > 0, "physical roll torque is disabled")
+expect(config.Ball.MechanicsVersion == "StreetControlV3", "football mechanics version is stale")
+expect(
+	type(config.VisualEffects) == "table" and config.VisualEffects.Version == "StreetReadabilityV1",
+	"football VFX version is stale"
+)
+expect(
+	config.VisualEffects.MaximumTransientParts >= 16
+		and config.VisualEffects.AimGuide.TrajectoryDots >= 4
+		and config.VisualEffects.BallDirection.MinimumSpeed > 0,
+	"football VFX limits are invalid"
+)
+expect(
+	config.Ball.FirstTouch.TrapHorizontalRetention
+		< config.Ball.FirstTouch.RedirectHorizontalRetention,
+	"explicit trap does not absorb more speed than automatic first touch"
+)
+expect(
+	config.Ball.Shot.AimAssist.Strength > 0 and config.Ball.Shot.AimAssist.Strength < 0.5,
+	"shot assistance is missing or too strong"
+)
+expect(
+	config.Ball.Pass.MovementAssistStrength > 0 and config.Ball.Pass.MovementAssistStrength < 0.5,
+	"running pass assistance is missing or too strong"
+)
 expect(config.Ball.Spin.MagnusCoefficient > 0, "physical side-spin curve is disabled")
 expect(
 	config.Ball.Capture.MaximumControlledBallSpeed >= config.Actions.DashSpeed,
 	"physical owner speed envelope is below DashSpeed"
 )
 expect(
-	config.Ball.Capture.OwnerRearAllowance
-		>= config.Ball.Dribble.IdleDistance
-			* config.Actions.Feint.Variants.DragBack.DistanceMultiplier,
-	"physical DragBack target falls outside owner retention"
+	config.Actions.Feint.ProtectionBreakRadius <= config.Ball.Capture.OwnerBreakRadius,
+	"close-control protection can outlive the owner retention envelope"
 )
 expect(
 	config.Ball.Capture.OwnerFrontDistance < config.Ball.Capture.OwnerBreakRadius,
@@ -681,7 +863,25 @@ expect(
 		> math.max(config.Ball.Shot.ChargeSeconds, config.Ball.Pass.ChargeSeconds),
 	"server charge safety timeout is shorter than the playable charge window"
 )
-expect(config.Actions.Tackle.RollRatio > 0, "tackle speed-derived roll tuning is missing")
+expect(
+	config.Actions.Tackle.TakeoverGraceSeconds > 0
+		and config.Actions.Tackle.MaximumStopDeltaSpeed > 0
+		and config.Actions.Tackle.MaximumStopAngularSpeed > 0,
+	"direct tackle takeover tuning is missing"
+)
+expect(
+	config.Actions.Feint.Variants.StepOver.LateralDistance > 0
+		and config.Actions.Feint.Variants.Cut.DistanceMultiplier > 1
+		and config.Actions.Feint.Variants.DragBack.DistanceMultiplier < 1
+		and config.Actions.Feint.Variants.Roulette.LateralDistance
+			> config.Actions.Feint.Variants.StepOver.LateralDistance,
+	"variant feint trajectories are missing or indistinguishable"
+)
+expect(
+	config.Actions.Feint.VulnerabilityStart == nil
+		and config.Actions.Tackle.FeintVulnerabilityRadiusBonus == nil,
+	"legacy dribble vulnerability tuning still exists"
+)
 expect(config.Actions.Panna.RollRatio > 0, "panna speed-derived roll tuning is missing")
 expect(config.Actions.Panna.ShooterRecaptureSeconds > 0, "panna recapture tuning is missing")
 expect(
@@ -1019,10 +1219,69 @@ expect(frontDot >= config.Actions.Tackle.AttackerForwardDot, "front tackle geome
 expect(sideDot < config.Actions.Tackle.AttackerForwardDot, "side tackle geometry accepted")
 expect(rearDot < config.Actions.Tackle.AttackerForwardDot, "rear tackle geometry accepted")
 expect(
-	frontDot >= config.Actions.Tackle.DefenderFrontDot
-		and sideDot < config.Actions.Tackle.DefenderFrontDot
-		and rearDot < config.Actions.Tackle.DefenderFrontDot,
+	frontDot >= config.Actions.Tackle.DefenderMinimumDot
+		and sideDot >= config.Actions.Tackle.DefenderMinimumDot
+		and rearDot < config.Actions.Tackle.DefenderMinimumDot,
 	"defender-facing tackle geometry is inconsistent"
+)
+for variantName, variant in config.Actions.Feint.Variants do
+	expect(
+		type(variant.Duration) == "number"
+			and variant.Duration > 0
+			and type(variant.DistanceMultiplier) == "number"
+			and variant.DistanceMultiplier > 0
+			and type(variant.LateralDistance) == "number"
+			and variant.LateralDistance >= 0
+			and type(variant.ControlAccelerationMultiplier) == "number"
+			and variant.ControlAccelerationMultiplier > 0
+			and variant.ControlAccelerationMultiplier <= 1,
+		"invalid physical trajectory tuning for " .. variantName
+	)
+end
+local feintOwner = {} :: any
+local feintService = {
+	config = config,
+	feints = {},
+} :: any
+local baseFeintDirection = Vector3.new(0, 0, -1)
+local feintStartedAt = 100
+local function sampleFeint(variantName: string, lateral: number): (Vector3, number)
+	local variant = config.Actions.Feint.Variants[variantName]
+	feintService.feints[feintOwner] = {
+		variant = variantName,
+		direction = baseFeintDirection,
+		lateral = lateral,
+		startedAt = feintStartedAt,
+		endsAt = feintStartedAt + variant.Duration,
+		protectedUntil = feintStartedAt + variant.Duration,
+	}
+	local direction, offset = ballServiceModule._feintTarget(
+		feintService,
+		feintOwner,
+		baseFeintDirection,
+		feintStartedAt + variant.Duration * 0.5
+	)
+	return direction, offset
+end
+local stepOverDirection, stepOverOffset = sampleFeint("StepOver", 1)
+local cutDirection, cutOffset = sampleFeint("Cut", -1)
+local dragBackDirection = sampleFeint("DragBack", 0)
+local rouletteDirection, rouletteOffset = sampleFeint("Roulette", 1)
+expect(
+	stepOverDirection:Dot(baseFeintDirection) > 0.999 and stepOverOffset > 0,
+	"StepOver physical trajectory is invalid"
+)
+expect(
+	cutDirection:Dot(baseFeintDirection) > 0.999 and cutOffset < 0,
+	"Cut physical trajectory is invalid"
+)
+expect(
+	dragBackDirection:Dot(-baseFeintDirection) > 0.999,
+	"DragBack physical trajectory did not reverse the ball"
+)
+expect(
+	math.abs(rouletteDirection:Dot(baseFeintDirection)) < 0.05 and rouletteOffset > stepOverOffset,
+	"Roulette physical trajectory did not rotate around the player"
 )
 
 for _, functionName in
@@ -1146,6 +1405,14 @@ expect(
 	world:GetAttribute("BallVisualVersion") == config.Ball.VisualVersion,
 	"district bake is not versioned by the soccer-ball visual contract"
 )
+expect(
+	world:GetAttribute("MechanicsVersion") == config.Ball.MechanicsVersion,
+	"district bake is not versioned by the football mechanics contract"
+)
+expect(
+	world:GetAttribute("VFXVersion") == config.VisualEffects.Version,
+	"district bake is not versioned by the football VFX contract"
+)
 
 local function expectConfiguredBall(ball: BasePart, label: string)
 	local diameter = config.Ball.Radius * 2
@@ -1163,6 +1430,10 @@ local function expectConfiguredBall(ball: BasePart, label: string)
 	expect(
 		ball:GetAttribute("BallVisualVersion") == config.Ball.VisualVersion,
 		label .. " visual version differs from Config"
+	)
+	expect(
+		ball:GetAttribute("MechanicsVersion") == config.Ball.MechanicsVersion,
+		label .. " mechanics version differs from Config"
 	)
 	local panelCount = 0
 	for _, child in ball:GetChildren() do
@@ -1246,8 +1517,8 @@ expect(
 local environment = world:FindFirstChild("DistrictEnvironment")
 expect(environment ~= nil and environment:IsA("Model"), "DistrictEnvironment is missing")
 expect(
-	environment:GetAttribute("DistrictStyle") == "NaturalFootballDistrict",
-	"district did not use the natural football visual style"
+	environment:GetAttribute("DistrictStyle") == "BrightBlockDistrict",
+	"district did not use the bright block visual style"
 )
 expect(
 	environment:GetAttribute("FieldStyle") == config.World.FieldStyle,
@@ -1258,10 +1529,16 @@ expect(
 	"district is not configured for daylight"
 )
 expect(Lighting.Brightness >= 2.5, "daylight brightness is too low")
-expect(Lighting:FindFirstChild("PannaSunRays") ~= nil, "daylight sun rays are missing")
+expect(Lighting.GlobalShadows == false, "minimal district should disable global shadows")
+local sunRays = Lighting:FindFirstChild("PannaSunRays")
+expect(sunRays ~= nil and sunRays:IsA("SunRaysEffect"), "sun rays effect is missing")
+expect((sunRays :: SunRaysEffect).Enabled == false, "sun rays should be disabled")
 local softBloom = Lighting:FindFirstChild("PannaSoftBloom")
-expect(softBloom ~= nil and softBloom:IsA("BloomEffect"), "soft daylight bloom is missing")
-expect((softBloom :: BloomEffect).Intensity <= 0.05, "daylight bloom is too strong")
+expect(softBloom ~= nil and softBloom:IsA("BloomEffect"), "bloom effect is missing")
+expect(
+	(softBloom :: BloomEffect).Enabled == false and (softBloom :: BloomEffect).Intensity == 0,
+	"minimal district bloom should be disabled"
+)
 local lobbySpawn = world:FindFirstChild("LobbySpawn", true)
 expect(lobbySpawn ~= nil and lobbySpawn:IsA("BasePart"), "LobbySpawn is missing")
 expect(world:FindFirstChild("QueuePrompt", true) ~= nil, "QueuePrompt is missing")
@@ -1392,7 +1669,7 @@ for _, arena in arenaList do
 			crossbar ~= nil
 				and crossbar:IsA("BasePart")
 				and crossbar.Material == Enum.Material.Metal
-				and crossbar.Color == Color3.fromRGB(235, 247, 255),
+				and crossbar.Color == Color3.fromRGB(250, 252, 255),
 			arena.Id .. " " .. goalName .. " does not use a readable football frame"
 		)
 		expect(teamAccent ~= nil and teamAccent:IsA("BasePart"), arena.Id .. " goal accent missing")

@@ -7,6 +7,7 @@ local Workspace = game:GetService("Workspace")
 local UIController = require(script:WaitForChild("UIController") :: ModuleScript)
 local InputController = require(script:WaitForChild("InputController") :: ModuleScript)
 local EffectScope = require(script:WaitForChild("EffectScope") :: ModuleScript)
+local FootballVFXController = require(script:WaitForChild("FootballVFXController") :: ModuleScript)
 local PlayerAnimationController =
 	require(script:WaitForChild("PlayerAnimationController") :: ModuleScript)
 
@@ -85,6 +86,7 @@ local function waitForRemote(
 end
 
 local ui = UIController.new()
+local footballVFX = FootballVFXController.new(LOCAL_PLAYER)
 local playerAnimations = PlayerAnimationController.new(LOCAL_PLAYER)
 local inputController: any = nil
 local connections: { RBXScriptConnection } = {}
@@ -110,6 +112,7 @@ local function resetTransientClientState()
 		return
 	end
 	playerAnimations:ResetTransientState()
+	footballVFX:ResetTransientState()
 	if inputController then
 		inputController:ResetTransientState()
 	else
@@ -228,6 +231,7 @@ local function destroy()
 		inputController = nil
 	end
 	playerAnimations:Destroy()
+	footballVFX:Destroy()
 	for _, connection in connections do
 		connection:Disconnect()
 	end
@@ -423,6 +427,7 @@ task.spawn(function()
 						resetTransientClientState()
 					end
 				end
+				footballVFX:ApplyEffect(payload)
 				if not playerAnimations:ApplyEffect(payload) then
 					ui:ApplyEffect(payload)
 				end
@@ -433,7 +438,7 @@ task.spawn(function()
 		end)
 	)
 
-	inputController = InputController.new(actionRequest, ui)
+	inputController = InputController.new(actionRequest, ui, footballVFX)
 	for _, payload in feedbackBeforeInput do
 		if inputController:ApplyActionFeedback(payload) then
 			playerAnimations:ApplyActionFeedback(payload)

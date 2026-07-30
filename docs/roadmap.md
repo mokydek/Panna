@@ -7,8 +7,9 @@
 - [x] структура Rojo и строгие общие типы;
 - [x] конфигурация правил, мяча, действий и наград;
 - [x] документация запуска, безопасности и тестирования;
-- [x] read-only validator репозитория (`44 OK / 0 WARN / 0 FAIL`) и Luau compile (`29/29`);
-- [x] четыре сборки Rojo, канонический bake и Studio Edit `RunScript` с `PANNA_STUDIO_SMOKE_OK arenas=6`;
+- [x] validator (`47 OK / 0 WARN / 0 FAIL`), StyLua, Selene (`0/0/0`), Luau compile (`30/30`) и diff-check объединённого `0.3.0-alpha`;
+- [x] четыре сборки Rojo и Studio Edit `RunScript` с `PANNA_STUDIO_SMOKE_OK version=0.3.0-alpha arenas=6`;
+- [x] исторический Studio Edit baseline `0.2.0-alpha` с маркером `PANNA_STUDIO_SMOKE_OK arenas=6`;
 - [x] процедурный `PannaDistrict` с центральной улицей, шестью тематическими комнатами и комнатным контрактом;
 - [x] структурный smoke текущих ball/panel/trail contracts, pose samples/restore, scoped cues, мира, арен и guide;
 - [ ] обычный client Play/Local Server без необработанных ошибок и ручной визуальный QA.
@@ -21,6 +22,8 @@
 - [ ] подтверждённые гол, overtime/golden goal и сброс позиций;
 - [x] asset-free процедурные позы Charge, Low/Normal/Chip, Pass, Trap, Shield, Dash, Tackle, Skill/Panna и четырёх Feint-вариантов для R6/R15;
 - [x] scoped server `PlayerAction`, аддитивный `PreSimulation`, восстановление joints, reset/respawn cleanup и timeout Charge;
+- [x] asset-free `StreetReadabilityV1`: направление ввода, приблизительная charge-траектория, фактический вектор мяча и bounded action VFX;
+- [x] `StreetControlV3`: четыре короткие физические траектории StepOver/Cut/DragBack/Roulette с защитой на время движения и прямой переход владения после чистого `TACKLE`;
 - [ ] настройка ведения, удара, паса, отбора, финта и рывка;
 - [ ] настройка серверной эвристики панны;
 - [ ] проверка movement envelope, collision groups и eject на шести одновременно занятых комнатах;
@@ -35,7 +38,7 @@
 
 - ручной визуальный Play-проход процедурных поз и мяча, точная настройка timing/контакта стопы, затем IK или mocap-полировка при необходимости;
 - оригинальные звуки удара, сетки, свистка и панны с подтверждёнными лицензиями;
-- эффекты гола, панны и сильного удара с настройкой для слабых устройств;
+- ручная настройка уже встроенных эффектов гола, панны и сильного удара для слабых устройств;
 - улучшение камеры и обучение первого матча;
 - доступность, локализация и переназначение управления;
 - финальный арт-проход улицы, лобби и всех шести оригинальных комнат поверх процедурного blockout;
