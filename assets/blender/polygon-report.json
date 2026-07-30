@@ -1,0 +1,108 @@
+{
+  "minimum_polygons": 3000,
+  "mesh_object_count": 12,
+  "all_mesh_objects_are_separate": true,
+  "detail_revision": "DetailedBlocksV2",
+  "shape_families": [
+    "cube_rectangle_triangle"
+  ],
+  "roblox_native_replica": "src/world/PannaBrightBlockKit.model.json",
+  "objects": [
+    {
+      "name": "Court_Block",
+      "polygons": 7296,
+      "vertices": 3668,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 10,
+      "individual_fbx": "individual_fbx/Court_Block.fbx"
+    },
+    {
+      "name": "Goal_Block",
+      "polygons": 10752,
+      "vertices": 5404,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 14,
+      "individual_fbx": "individual_fbx/Goal_Block.fbx"
+    },
+    {
+      "name": "Barrier_Block",
+      "polygons": 7296,
+      "vertices": 3668,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 10,
+      "individual_fbx": "individual_fbx/Barrier_Block.fbx"
+    },
+    {
+      "name": "Bench_Block",
+      "polygons": 8064,
+      "vertices": 4054,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 11,
+      "individual_fbx": "individual_fbx/Bench_Block.fbx"
+    },
+    {
+      "name": "QueueGate_Block",
+      "polygons": 8256,
+      "vertices": 4150,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 11,
+      "individual_fbx": "individual_fbx/QueueGate_Block.fbx"
+    },
+    {
+      "name": "Lamp_Block",
+      "polygons": 8064,
+      "vertices": 4054,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 11,
+      "individual_fbx": "individual_fbx/Lamp_Block.fbx"
+    },
+    {
+      "name": "Direction_Triangle",
+      "polygons": 3840,
+      "vertices": 1932,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 6,
+      "individual_fbx": "individual_fbx/Direction_Triangle.fbx"
+    },
+    {
+      "name": "ArenaMarker_Triangle",
+      "polygons": 4224,
+      "vertices": 2124,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 6,
+      "individual_fbx": "individual_fbx/ArenaMarker_Triangle.fbx"
+    },
+    {
+      "name": "Podium_Block",
+      "polygons": 8256,
+      "vertices": 4150,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 11,
+      "individual_fbx": "individual_fbx/Podium_Block.fbx"
+    },
+    {
+      "name": "Sign_Block",
+      "polygons": 8256,
+      "vertices": 4150,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 11,
+      "individual_fbx": "individual_fbx/Sign_Block.fbx"
+    },
+    {
+      "name": "Trophy_Triangle",
+      "polygons": 7104,
+      "vertices": 3572,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 10,
+      "individual_fbx": "individual_fbx/Trophy_Triangle.fbx"
+    },
+    {
+      "name": "Display_Base_Block",
+      "polygons": 6528,
+      "vertices": 3282,
+      "shape_family": "cube_rectangle_triangle",
+      "component_count": 9,
+      "individual_fbx": "individual_fbx/Display_Base_Block.fbx"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Panna Bright Block Asset Kit",
+  "tree": {
+    "$path": "src/world/PannaBrightBlockKit.model.json"
+  }
+}

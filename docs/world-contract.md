@@ -73,7 +73,7 @@ Workspace
 - `BallVisualVersion = Config.Ball.VisualVersion`;
 - `RoomStateContract = "Free,Waiting,Countdown,Active,Result"`.
 
-`PannaDistrict` и `DistrictEnvironment` имеют `FieldStyle = "NaturalGrassFootballV1"`; `DistrictEnvironment` также имеет `DistrictStyle = "NaturalFootballDistrict"` и `ExternalAssetCount = 0`. У `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`. Отсутствующий или несовпадающий `FieldStyle`, `BallRadius` либо `BallVisualVersion` делает старый bake несовместимым и заставляет builder безопасно пересобрать ту же сцену.
+`PannaDistrict` и `DistrictEnvironment` имеют `FieldStyle = "BrightBlockFootballV1"`; `DistrictEnvironment` также имеет `DistrictStyle = "BrightBlockDistrict"`, `EditablePieces = true` и `ExternalAssetCount = 0`. Отдельный корень `Workspace/PannaDetailedAssets` содержит 12 групп/120 нативных компонентов `DetailedBlocksV2`, синхронизируется Rojo напрямую и не участвует в runtime-контракте арен. У `CentralStreet` задано `Continuous = true` и сохранены её границы `StartZ`/`EndZ`. Отсутствующий или несовпадающий `FieldStyle`, `BallRadius` либо `BallVisualVersion` делает старый bake несовместимым и заставляет builder безопасно пересобрать ту же сцену.
 
 `QueuePad` и `QueuePrompt` имеют `QueueMode = "1v1"`. UI-кнопка быстрой очереди и prompt должны идти через один серверный путь. Для prompt используются `T` на клавиатуре и `R3` на геймпаде; touch использует стандартное взаимодействие Roblox.
 
@@ -127,7 +127,7 @@ Source-контракт дополнительно требует на корн�
 | `ArenaId` | `string` | `Arena_N` | Уникальный стабильный ID |
 | `RoomIndex` | `number` | `1`…`6` | Порядок комнаты |
 | `DisplayName`, `RoomTitle` | `string` | тема из таблицы выше | Название на табло/UI |
-| `PitchStyle` | `string` | `NaturalGrassFootballV1` | Версия визуального и физического контракта поля |
+| `PitchStyle` | `string` | `BrightBlockFootballV1` | Версия визуального и физического контракта поля |
 | `DistrictSide` | `string` | `Left`/`Right` | Сторона центральной улицы |
 | `ArenaState` | `string` | `Free` | Состояние комнаты |
 | `Busy` | `boolean` | `false` | `true` во всех состояниях кроме `Free` |

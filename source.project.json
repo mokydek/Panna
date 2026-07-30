@@ -29,6 +29,9 @@
       "$properties": {
         "StreamingEnabled": true,
         "FallenPartsDestroyHeight": -100
+      },
+      "PannaDetailedAssets": {
+        "$path": "src/world/PannaBrightBlockKit.model.json"
       }
     }
   }

@@ -37,6 +37,9 @@
       },
       "PannaDistrict": {
         "$path": "src/world/PannaDistrict.model.json"
+      },
+      "PannaDetailedAssets": {
+        "$path": "src/world/PannaBrightBlockKit.model.json"
       }
     }
   }

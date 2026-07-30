@@ -185,6 +185,105 @@ function BallMath.PreferredControlDirection(
 	return BallMath.HorizontalUnit(facing, Vector3.zero)
 end
 
+function BallMath.SmoothControlDistance(
+	speed: number,
+	idleDistance: number,
+	walkDistance: number,
+	sprintDistance: number,
+	walkThreshold: number,
+	sprintSpeed: number
+): number?
+	for _, value in
+		{
+			speed,
+			idleDistance,
+			walkDistance,
+			sprintDistance,
+			walkThreshold,
+			sprintSpeed,
+		}
+	do
+		if not BallMath.IsFiniteNumber(value) then
+			return nil
+		end
+	end
+
+	local idle = math.max(0, idleDistance)
+	local walk = math.max(idle, walkDistance)
+	local sprint = math.max(walk, sprintDistance)
+	local walkAt = math.max(0.05, walkThreshold)
+	local sprintAt = math.max(walkAt + 0.05, sprintSpeed)
+	local safeSpeed = math.max(0, speed)
+	if safeSpeed <= walkAt then
+		local alpha = math.clamp(safeSpeed / walkAt, 0, 1)
+		return idle + (walk - idle) * alpha
+	end
+	local alpha = math.clamp((safeSpeed - walkAt) / (sprintAt - walkAt), 0, 1)
+	return walk + (sprint - walk) * alpha
+end
+
+function BallMath.AssistedHorizontalDirection(
+	inputDirection: Vector3,
+	targetDirection: Vector3,
+	minimumDot: number,
+	strength: number
+): (Vector3?, boolean)
+	if
+		not BallMath.IsFiniteVector3(inputDirection)
+		or not BallMath.IsFiniteVector3(targetDirection)
+		or not BallMath.IsFiniteNumber(minimumDot)
+		or not BallMath.IsFiniteNumber(strength)
+	then
+		return nil, false
+	end
+	local input = BallMath.HorizontalUnit(inputDirection, Vector3.zero)
+	local target = BallMath.HorizontalUnit(targetDirection, Vector3.zero)
+	if not input or not target then
+		return nil, false
+	end
+	local weight = math.clamp(strength, 0, 1)
+	if weight <= 0 or input:Dot(target) < math.clamp(minimumDot, -1, 1) then
+		return input, false
+	end
+	local blended = input * (1 - weight) + target * weight
+	if blended.Magnitude < 0.05 then
+		return input, false
+	end
+	return blended.Unit, true
+end
+
+function BallMath.CushionedTouchVelocity(
+	incomingVelocity: Vector3,
+	carrierVelocity: Vector3,
+	touchDirection: Vector3,
+	horizontalRetention: number,
+	verticalRetention: number,
+	maximumExitSpeed: number
+): Vector3?
+	if
+		not BallMath.IsFiniteVector3(incomingVelocity)
+		or not BallMath.IsFiniteVector3(carrierVelocity)
+		or not BallMath.IsFiniteVector3(touchDirection)
+		or not BallMath.IsFiniteNumber(horizontalRetention)
+		or not BallMath.IsFiniteNumber(verticalRetention)
+		or not BallMath.IsFiniteNumber(maximumExitSpeed)
+	then
+		return nil
+	end
+	local forward = BallMath.HorizontalUnit(touchDirection, carrierVelocity)
+	if not forward then
+		return nil
+	end
+	local incomingHorizontal = Vector3.new(incomingVelocity.X, 0, incomingVelocity.Z)
+	local carrierHorizontal = Vector3.new(carrierVelocity.X, 0, carrierVelocity.Z)
+	local retainedForwardSpeed = math.max(0, incomingHorizontal:Dot(forward))
+		* math.clamp(horizontalRetention, 0, 1)
+	local target = carrierHorizontal
+		+ forward * retainedForwardSpeed
+		+ Vector3.yAxis * incomingVelocity.Y * math.clamp(verticalRetention, 0, 1)
+	return BallMath.ClampMagnitude(target, math.max(0, maximumExitSpeed))
+end
+
 function BallMath.PhysicalControlTarget(
 	rootCFrame: CFrame,
 	direction: Vector3,

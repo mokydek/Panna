@@ -19,9 +19,9 @@ local BINDINGS = ControlCatalog.Bindings
 local TOUCH_TITLES = ControlCatalog.TouchTitles
 local DEFAULT_COOLDOWNS = table.freeze({
 	Kick = 0.28,
-	Pass = 0.35,
-	Feint = 1.1,
-	Tackle = 1.2,
+	Pass = 0.28,
+	Feint = 0.95,
+	Tackle = 0.9,
 	Skill = 2,
 	Shield = 0.15,
 	Dash = 3,
@@ -43,8 +43,8 @@ local DEFAULT_TIMINGS: TimingSettings = table.freeze({
 	passChargeSeconds = 0.9,
 	minimumKickPower = 0.1,
 	minimumPassPower = 0.1,
-	kickPowerExponent = 1,
-	passPowerExponent = 1.05,
+	kickPowerExponent = 1.1,
+	passPowerExponent = 1.08,
 	pendingTimeoutSeconds = 2.1,
 	trapBufferSeconds = 0.9,
 })
@@ -63,6 +63,22 @@ type UIControllerLike = {
 	IsControlsGuideVisible: (self: any) -> boolean,
 }
 
+type VFXControllerLike = {
+	SetAimState: (
+		self: any,
+		ball: BasePart?,
+		ballState: string,
+		ownerUserId: number,
+		direction: Vector3,
+		action: string,
+		mode: string,
+		power: number,
+		gameplayActive: boolean,
+		charging: boolean
+	) -> (),
+	ResetTransientState: (self: any) -> (),
+}
+
 type PendingRequest = {
 	action: string,
 	uiAction: string?,
@@ -77,10 +93,12 @@ type PendingRequest = {
 type ControllerFields = {
 	_actionRequest: RemoteEvent,
 	_ui: UIControllerLike,
+	_vfx: VFXControllerLike?,
 	_chargingAction: string?,
 	_chargeStartedAt: number,
 	_chargeInputId: string?,
 	_chargeToken: number,
+	_primaryMouseTackleActive: boolean,
 	_shotTypeIndex: number,
 	_shieldHeld: boolean,
 	_shielding: boolean,
@@ -295,15 +313,21 @@ local function styleTouchButton(button: GuiButton, size: number)
 	end
 end
 
-function InputController.new(actionRequest: RemoteEvent, ui: UIControllerLike): InputController
+function InputController.new(
+	actionRequest: RemoteEvent,
+	ui: UIControllerLike,
+	vfx: VFXControllerLike?
+): InputController
 	local cooldowns, shieldMaxSeconds, timings = loadActionSettings()
 	local self = setmetatable({
 		_actionRequest = actionRequest,
 		_ui = ui,
+		_vfx = vfx,
 		_chargingAction = nil,
 		_chargeStartedAt = 0,
 		_chargeInputId = nil,
 		_chargeToken = 0,
+		_primaryMouseTackleActive = false,
 		_shotTypeIndex = 1,
 		_shieldHeld = false,
 		_shielding = false,
@@ -348,6 +372,7 @@ function InputController.new(actionRequest: RemoteEvent, ui: UIControllerLike): 
 
 	local function cancelTransientInput()
 		self:_cancelCharge()
+		self._primaryMouseTackleActive = false
 		self._shieldHeld = false
 		self._trapBufferEndsAt = 0
 		self:_stopShield()
@@ -736,6 +761,7 @@ function InputController.ResetTransientState(self: InputController)
 	self._chargingAction = nil
 	self._chargeInputId = nil
 	self._chargeToken += 1
+	self._primaryMouseTackleActive = false
 	self._chargeStartedAt = 0
 	self._shieldHeld = false
 	self:_stopShield(false)
@@ -763,6 +789,10 @@ function InputController.ResetTransientState(self: InputController)
 		end
 	end
 	self._ui:ResetTransientState()
+	local vfx = self._vfx
+	if vfx then
+		vfx:ResetTransientState()
+	end
 end
 
 function InputController._beginCharge(
@@ -850,6 +880,39 @@ function InputController._onChargeAction(
 		return self:_finishCharge(action, input, true)
 	end
 	return Enum.ContextActionResult.Pass
+end
+
+function InputController._primaryMouseUsesTackle(self: InputController): boolean
+	local _, ballState, ownerUserId = self:_ballContext()
+	return ballState == "Controlled" and ownerUserId ~= 0 and ownerUserId ~= LOCAL_PLAYER.UserId
+end
+
+function InputController._onPrimaryAction(
+	self: InputController,
+	inputState: Enum.UserInputState,
+	input: InputObject
+): Enum.ContextActionResult
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+		return self:_onChargeAction("Kick", inputState, input)
+	end
+
+	if self._primaryMouseTackleActive then
+		if inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+			self._primaryMouseTackleActive = false
+		end
+		return Enum.ContextActionResult.Sink
+	end
+
+	if inputState == Enum.UserInputState.Begin and self:_primaryMouseUsesTackle() then
+		if inputIsBlocked() or not self:_isGameplayActive() or self._ui:IsPointerOverUI() then
+			return Enum.ContextActionResult.Pass
+		end
+		self:_cancelCharge()
+		self._primaryMouseTackleActive = true
+		return self:_onInstantAction("Tackle", inputState)
+	end
+
+	return self:_onChargeAction("Kick", inputState, input)
 end
 
 function InputController._feintPayload(self: InputController): { [string]: any }
@@ -1129,6 +1192,9 @@ function InputController._onRenderStep(self: InputController)
 	end
 	local now = os.clock()
 	local gameplayActive = self:_isGameplayActive()
+	local previewAction = self._chargingAction
+		or if self:_primaryMouseUsesTackle() then "Tackle" else "Kick"
+	local previewPower = 0
 	if self._chargingAction then
 		if gameplayActive then
 			local action = self._chargingAction
@@ -1142,6 +1208,7 @@ function InputController._onRenderStep(self: InputController)
 				then self._kickPowerExponent
 				else self._passPowerExponent
 			local power = chargePower(now - self._chargeStartedAt, duration, minimumPower, exponent)
+			previewPower = power
 			self._ui:SetPowerMeter(
 				action,
 				power,
@@ -1151,6 +1218,22 @@ function InputController._onRenderStep(self: InputController)
 		else
 			self:_cancelCharge()
 		end
+	end
+	local vfx = self._vfx
+	if vfx then
+		local ball, ballState, ownerUserId = self:_ballContext()
+		local direction = self:_directionForAction(previewAction)
+		vfx:SetAimState(
+			ball,
+			ballState,
+			ownerUserId,
+			direction,
+			previewAction,
+			if previewAction == "Kick" then self:_shotType() else "Ground",
+			previewPower,
+			gameplayActive,
+			self._chargingAction ~= nil
+		)
 	end
 	if self._trapBufferEndsAt > 0 then
 		local remaining = self._trapBufferEndsAt - now
@@ -1184,7 +1267,7 @@ function InputController._bindActions(self: InputController)
 	local dashInputs = (ACTIONS :: any).Dash.inputs
 	local shotModeInputs = (ACTIONS :: any).ShotMode.inputs
 	ContextActionService:BindActionAtPriority(BINDINGS.Kick, function(_, inputState, input)
-		return self:_onChargeAction("Kick", inputState, input)
+		return self:_onPrimaryAction(inputState, input)
 	end, makeTouchButtons, ACTION_PRIORITY, table.unpack(kickInputs))
 	ContextActionService:BindActionAtPriority(BINDINGS.Pass, function(_, inputState, input)
 		return self:_onChargeAction("Pass", inputState, input)

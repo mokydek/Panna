@@ -27,15 +27,15 @@
     },
     "Lighting": {
       "$properties": {
-        "ClockTime": 13.8,
-        "Brightness": 2.65,
-        "ExposureCompensation": 0.05,
-        "Ambient": [0.5372549020, 0.5803921569, 0.5568627451],
-        "OutdoorAmbient": [0.6627450980, 0.7098039216, 0.6823529412],
-        "EnvironmentDiffuseScale": 0.8,
-        "EnvironmentSpecularScale": 0.35,
-        "GlobalShadows": true,
-        "ShadowSoftness": 0.45
+        "ClockTime": 14.0,
+        "Brightness": 2.8,
+        "ExposureCompensation": 0.08,
+        "Ambient": [0.6352941176, 0.6705882353, 0.7215686275],
+        "OutdoorAmbient": [0.7450980392, 0.7921568627, 0.8392156863],
+        "EnvironmentDiffuseScale": 0.72,
+        "EnvironmentSpecularScale": 0.18,
+        "GlobalShadows": false,
+        "ShadowSoftness": 0.3
       },
       "PannaAtmosphere": {
         "$className": "Atmosphere",
@@ -43,12 +43,12 @@
           "Attributes": {
             "PannaDistrictBuilderEffect": { "Bool": true }
           },
-          "Density": 0.12,
-          "Offset": 0.15,
-          "Color": [0.8117647059, 0.8784313725, 0.9254901961],
-          "Decay": [0.5686274510, 0.6549019608, 0.6823529412],
-          "Glare": 0.02,
-          "Haze": 0.4
+          "Density": 0.06,
+          "Offset": 0.1,
+          "Color": [0.8784313725, 0.9333333333, 0.9803921569],
+          "Decay": [0.6901960784, 0.7686274510, 0.8235294118],
+          "Glare": 0.0,
+          "Haze": 0.15
         }
       },
       "PannaColorGrade": {
@@ -59,9 +59,9 @@
           },
           "Enabled": true,
           "Brightness": 0.01,
-          "Contrast": 0.04,
-          "Saturation": 0.02,
-          "TintColor": [1.0, 0.9882352941, 0.9607843137]
+          "Contrast": 0.02,
+          "Saturation": 0.08,
+          "TintColor": [1.0, 1.0, 1.0]
         }
       },
       "PannaSoftBloom": {
@@ -70,8 +70,8 @@
           "Attributes": {
             "PannaDistrictBuilderEffect": { "Bool": true }
           },
-          "Enabled": true,
-          "Intensity": 0.04,
+          "Enabled": false,
+          "Intensity": 0.0,
           "Size": 12,
           "Threshold": 2.0
         }
@@ -82,8 +82,8 @@
           "Attributes": {
             "PannaDistrictBuilderEffect": { "Bool": true }
           },
-          "Enabled": true,
-          "Intensity": 0.025,
+          "Enabled": false,
+          "Intensity": 0.0,
           "Spread": 0.65
         }
       }
@@ -95,6 +95,9 @@
       },
       "PannaDistrict": {
         "$path": "src/world/PannaDistrict.model.json"
+      },
+      "PannaDetailedAssets": {
+        "$path": "src/world/PannaBrightBlockKit.model.json"
       }
     }
   }

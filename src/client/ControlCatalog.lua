@@ -34,7 +34,7 @@ local actions = {
 	Kick = table.freeze({
 		bindingName = "Panna_Kick",
 		title = "SHOT - NORMAL",
-		keyboard = "LMB - Z MODE",
+		keyboard = "LMB: SHOT / STEAL",
 		gamepad = "R2 - DPAD UP",
 		touchTitle = "SHOT",
 		inputs = table.freeze({ Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2 }),
@@ -49,7 +49,7 @@ local actions = {
 	}),
 	Feint = table.freeze({
 		bindingName = "Panna_Feint",
-		title = "DRIBBLE MOVE",
+		title = "CLOSE CONTROL",
 		keyboard = "Q",
 		gamepad = "R1",
 		touchTitle = "DRIBBLE",
@@ -58,7 +58,7 @@ local actions = {
 	Tackle = table.freeze({
 		bindingName = "Panna_Tackle",
 		title = "TACKLE",
-		keyboard = "E",
+		keyboard = "LMB / E",
 		gamepad = "B",
 		touchTitle = "TACKLE",
 		inputs = table.freeze({ Enum.KeyCode.E, Enum.KeyCode.F, Enum.KeyCode.ButtonB }),
@@ -117,10 +117,10 @@ local guideEntries = table.freeze({
 	table.freeze({
 		id = "Kick",
 		title = "SHOT",
-		keyboard = "HOLD / RELEASE LMB",
+		keyboard = "WITH BALL: HOLD / RELEASE LMB",
 		gamepad = "HOLD / RELEASE R2",
 		touch = "HOLD / RELEASE SHOT",
-		description = "Hold for power and aim with the camera. Move sideways relative to the camera while releasing to add curve.",
+		description = "With possession, hold for power and aim with the camera. Plausible goal-facing shots get a small server assist; move sideways while releasing to add curve.",
 	}),
 	table.freeze({
 		id = "ShotMode",
@@ -136,15 +136,15 @@ local guideEntries = table.freeze({
 		keyboard = "HOLD / RELEASE RMB",
 		gamepad = "HOLD / RELEASE X",
 		touch = "HOLD / RELEASE PASS",
-		description = "Charge a controlled low pass. It can be buffered just before your first touch.",
+		description = "Charge a controlled low pass into space. While running, it bends slightly toward your trusted movement line and can be buffered before first touch.",
 	}),
 	table.freeze({
 		id = "Feint",
-		title = "DRIBBLE MOVE / FEINT",
+		title = "CLOSE CONTROL / DRIBBLE",
 		keyboard = "Q",
 		gamepad = "R1",
 		touch = "DRIBBLE",
-		description = "With the ball: forward StepOver, sideways Cut, back DragBack, Shield + Feint Roulette.",
+		description = "With the ball, stop it briefly under close control. Tackles cannot win it during the short move; time the cooldown.",
 	}),
 	table.freeze({
 		id = "Skill",
@@ -152,15 +152,15 @@ local guideEntries = table.freeze({
 		keyboard = "R",
 		gamepad = "Y",
 		touch = "PANNA",
-		description = "With the ball, get close and face the opponent to play it through their legs.",
+		description = "With the ball, face a nearby defender who is set toward you; a valid attempt is guided through the leg gate.",
 	}),
 	table.freeze({
 		id = "Tackle",
 		title = "TACKLE",
-		keyboard = "E",
+		keyboard = "LMB WITHOUT BALL / E",
 		gamepad = "B",
 		touch = "TACKLE",
-		description = "Without the ball, approach the carrier from the front. A front-facing Shield can block it.",
+		description = "When the opponent controls the ball, LMB becomes Tackle: win possession directly without kicking the ball. E, gamepad B and the touch button do the same. Shield or active Close Control blocks it.",
 	}),
 	table.freeze({
 		id = "Shield",
@@ -168,7 +168,7 @@ local guideEntries = table.freeze({
 		keyboard = "C: TAP TRAP / HOLD SHIELD",
 		gamepad = "L2: TAP TRAP / HOLD SHIELD",
 		touch = "TAP TRAP / HOLD SHIELD",
-		description = "Near a free or incoming ball, press once to buffer a soft first touch. With possession, hold to shield.",
+		description = "Near a free or incoming ball, press once to buffer a full trap; automatic touches preserve a little momentum. With possession, hold to shield.",
 	}),
 	table.freeze({
 		id = "Dash",
